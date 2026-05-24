@@ -1,0 +1,89 @@
+{
+  "name": "agentwatch",
+  "displayName": "AgentWatch",
+  "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP.",
+  "version": "0.1.0",
+  "publisher": "agentwatch",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agentwatch/agentwatch"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["AI", "Other"],
+  "keywords": ["ai", "agents", "coordination", "claude", "codex", "mcp", "multi-agent"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentwatch",
+          "title": "AgentWatch",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentwatch": [
+        {
+          "type": "webview",
+          "id": "agentwatch.boardView",
+          "name": "Board",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "agentwatch.openBoard",
+        "title": "AgentWatch: Open Board (Tab)"
+      },
+      {
+        "command": "agentwatch.stopAll",
+        "title": "AgentWatch: STOP All Agents"
+      },
+      {
+        "command": "agentwatch.showMcpConfig",
+        "title": "AgentWatch: Show MCP Config"
+      }
+    ],
+    "configuration": {
+      "title": "AgentWatch",
+      "properties": {
+        "agentwatch.port": {
+          "type": "number",
+          "default": 7878,
+          "description": "Port for the AgentWatch MCP server. Both Claude Code and Codex CLI connect here."
+        },
+        "agentwatch.claimTtlMinutes": {
+          "type": "number",
+          "default": 120,
+          "description": "How long a file claim stays active before it expires automatically."
+        },
+        "agentwatch.coordinationPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the repo being coordinated. Leave empty to use the current workspace folder."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"N:/vs code apps/Agentwatch/scripts/board-monitor.js\" &"
+          }
+        ]
+      }
+    ]
+  }
+}

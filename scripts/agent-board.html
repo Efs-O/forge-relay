@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Chat Board</title>
+  <style>
+    :root {
+      --bg: #efe7d6;
+      --panel: rgba(255, 251, 243, 0.94);
+      --line: #dccfb3;
+      --ink: #1d2420;
+      --muted: #5b625c;
+      --accent: #0f766e;
+      --user: #9a3412;
+      --codex: #0f766e;
+      --claude: #2563eb;
+      --system: #6b7280;
+      --danger: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #fffcf6 0, #fffcf6 22%, transparent 23%),
+        linear-gradient(135deg, #eadfc7, #f7f1e2 56%, #e7dbc0);
+      min-height: 100vh;
+    }
+    .shell {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .hero, .main {
+      display: grid;
+      gap: 16px;
+    }
+    .hero {
+      grid-template-columns: 1.4fr 0.8fr;
+      margin-bottom: 16px;
+    }
+    .main {
+      grid-template-columns: 1.45fr 0.85fr;
+      align-items: start;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 12px 28px rgba(70, 54, 26, 0.08);
+      backdrop-filter: blur(6px);
+    }
+    .pad { padding: 18px; }
+    h1, h2, h3 {
+      margin: 0 0 10px;
+      line-height: 1.1;
+    }
+    h1 { font-size: 34px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 15px; }
+    p { margin: 0; color: var(--muted); }
+    .meta, .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .meta { margin-top: 12px; }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      background: rgba(248, 241, 223, 0.9);
+    }
+    .statusbar {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .banner {
+      margin-top: 12px;
+      border-radius: 16px;
+      border: 1px solid #f2c4c4;
+      background: linear-gradient(135deg, #fff7f7, #fff0f0);
+      padding: 14px 16px;
+    }
+    .banner strong {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input, textarea {
+      width: 100%;
+      font: inherit;
+      color: var(--ink);
+      background: #fffef9;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    textarea {
+      resize: vertical;
+      min-height: 90px;
+    }
+    .compose-grid {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font: inherit;
+      color: white;
+      background: var(--accent);
+    }
+    button.stop { background: var(--danger); }
+    button.ghost {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .chat-list, .claim-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .chat-item, .claim-item {
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.62);
+      padding: 12px;
+    }
+    .chat-item {
+      border-left-width: 6px;
+    }
+    .chat-item.user { border-left-color: var(--user); }
+    .chat-item.codex { border-left-color: var(--codex); }
+    .chat-item.claude { border-left-color: var(--claude); }
+    .chat-item.system,
+    .chat-item.claim,
+    .chat-item.release { border-left-color: var(--system); }
+    .chat-item.command { border-left-color: var(--danger); background: rgba(255, 243, 243, 0.9); }
+    .chat-item.ack,
+    .chat-item.resolve { border-left-color: #7c3aed; }
+    .chat-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+    .chat-role {
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .chat-body {
+      white-space: pre-wrap;
+      line-height: 1.35;
+    }
+    .paths {
+      margin-top: 8px;
+      white-space: pre-wrap;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      color: #30433b;
+    }
+    .small {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .side-block + .side-block {
+      margin-top: 16px;
+    }
+    @media (max-width: 1100px) {
+      .hero, .main, .compose-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div class="card pad">
+        <h1>Project Chat Board</h1>
+        <p>User, Codex, and Claude coordinate here in public view, then go work, then report back here.</p>
+        <div class="meta">
+          <div class="pill">Live chat feed</div>
+          <div class="pill">Visible claims</div>
+          <div class="pill">Operator stop control</div>
+          <div class="pill">Polling every 2s</div>
+        </div>
+      </div>
+      <div class="card pad">
+        <h2>Live Status</h2>
+        <div class="statusbar" id="statusBar">Loading...</div>
+        <div class="banner" id="commandBanner">
+          <strong>No active stop command</strong>
+          <div class="small">Use the red button if you want everyone to stop and report back here.</div>
+        </div>
+        <div class="button-row" style="margin-top:10px;">
+          <button class="ghost" id="ackBtn">Acknowledge Stop</button>
+          <button class="ghost" id="resolveBtn">Clear Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="main">
+      <section class="card pad">
+        <h2>Shared Conversation</h2>
+        <div class="compose-grid">
+          <div>
+            <label for="agentName">Speaker</label>
+            <input id="agentName" placeholder="user, codex, claude">
+          </div>
+          <div>
+            <label for="note">Message</label>
+            <textarea id="note" placeholder="Discuss the project, propose task split, report progress, or ask for a stop."></textarea>
+          </div>
+        </div>
+        <div class="button-row">
+          <button id="postBtn">Send Message</button>
+          <button class="stop" id="stopBtn">STOP All Work</button>
+          <button class="ghost" id="refreshBtn">Refresh</button>
+        </div>
+        <div class="chat-list" id="chat"></div>
+      </section>
+
+      <section class="card pad">
+        <div class="side-block">
+          <h2>Active Claims</h2>
+          <div class="small">Who owns which files right now.</div>
+          <div class="claim-list" id="claims"></div>
+        </div>
+
+        <div class="side-block">
+          <h2>Claim / Release</h2>
+          <div>
+            <label for="ttl">TTL Minutes</label>
+            <input id="ttl" type="number" value="120" min="5" max="1440">
+          </div>
+          <div style="margin-top:10px;">
+            <label for="claimNote">Claim Note</label>
+            <input id="claimNote" placeholder="What this work covers">
+          </div>
+          <div style="margin-top:10px;">
+            <label for="targets">Targets</label>
+            <textarea id="targets" placeholder="One repo-relative path per line"></textarea>
+          </div>
+          <div class="button-row" style="margin-top:10px;">
+            <button id="claimBtn">Claim</button>
+            <button class="ghost" id="releaseBtn">Release</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const els = {
+      agentName: document.getElementById('agentName'),
+      note: document.getElementById('note'),
+      ttl: document.getElementById('ttl'),
+      claimNote: document.getElementById('claimNote'),
+      targets: document.getElementById('targets'),
+      claims: document.getElementById('claims'),
+      chat: document.getElementById('chat'),
+      statusBar: document.getElementById('statusBar'),
+      commandBanner: document.getElementById('commandBanner'),
+      postBtn: document.getElementById('postBtn'),
+      stopBtn: document.getElementById('stopBtn'),
+      claimBtn: document.getElementById('claimBtn'),
+      releaseBtn: document.getElementById('releaseBtn'),
+      refreshBtn: document.getElementById('refreshBtn'),
+      ackBtn: document.getElementById('ackBtn'),
+      resolveBtn: document.getElementById('resolveBtn'),
+    };
+
+    let activeCommandId = null;
+    els.agentName.value = localStorage.getItem('coord.agent') || 'user';
+    els.agentName.addEventListener('input', () => {
+      localStorage.setItem('coord.agent', els.agentName.value.trim());
+    });
+
+    function escapeHtml(value) {
+      return (value || '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[c]));
+    }
+
+    function time(value) {
+      try {
+        return new Date(value).toLocaleString();
+      } catch {
+        return value;
+      }
+    }
+
+    async function api(path, payload) {
+      const res = await fetch(path, {
+        method: payload ? 'POST' : 'GET',
+        headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+        body: payload ? JSON.stringify(payload) : undefined
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || `Request failed: ${res.status}`);
+      }
+      return data;
+    }
+
+    function parseTargets() {
+      return els.targets.value
+        .split(/\r?\n/)
+        .map(v => v.trim())
+        .filter(Boolean);
+    }
+
+    function roleClass(event) {
+      const agent = (event.agent || '').toLowerCase();
+      if (event.type === 'command' || event.type === 'ack' || event.type === 'resolve' || event.type === 'claim' || event.type === 'release') {
+        return event.type;
+      }
+      if (agent === 'user' || agent === 'operator') return 'user';
+      if (agent === 'claude') return 'claude';
+      if (agent === 'codex') return 'codex';
+      return 'system';
+    }
+
+    function roleLabel(event) {
+      if (event.type === 'post') return event.agent || 'unknown';
+      if (event.type === 'command') return `${event.agent || 'user'} · STOP`;
+      if (event.type === 'ack') return `${event.agent || 'agent'} · ACK`;
+      if (event.type === 'resolve') return `${event.agent || 'user'} · CLEAR`;
+      if (event.type === 'claim') return `${event.agent || 'agent'} · CLAIM`;
+      if (event.type === 'release') return `${event.agent || 'agent'} · RELEASE`;
+      return event.agent || event.type;
+    }
+
+    function render(state) {
+      const openCommands = [...(state.commands || [])]
+        .filter(c => c.status === 'open' || c.status === 'acknowledged')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const topCommand = openCommands[0];
+
+      els.statusBar.textContent =
+        `Last refresh: ${time(state.generated_at)} | Active claims: ${state.claims.length} | Open stop commands: ${openCommands.length}`;
+
+      if (topCommand) {
+        activeCommandId = topCommand.id;
+        const acks = (topCommand.acknowledgements || []).map(a => a.agent).join(', ') || 'none';
+        els.commandBanner.innerHTML = `
+          <strong>STOP active for ${escapeHtml(topCommand.target_agent)}</strong>
+          <div>${escapeHtml(topCommand.text)}</div>
+          <div class="small" style="margin-top:8px;">
+            Posted by ${escapeHtml(topCommand.created_by)} at ${time(topCommand.created_at)} | Acknowledged by: ${escapeHtml(acks)}
+          </div>
+        `;
+      } else {
+        activeCommandId = null;
+        els.commandBanner.innerHTML = `
+          <strong>No active stop command</strong>
+          <div class="small">Use the red button if you want everyone to stop and report back here.</div>
+        `;
+      }
+
+      if (!state.claims.length) {
+        els.claims.innerHTML = '<div class="empty">No active claims.</div>';
+      } else {
+        els.claims.innerHTML = state.claims.map(claim => `
+          <div class="claim-item">
+            <h3>${escapeHtml(claim.agent)}</h3>
+            <div class="small">Claimed: ${time(claim.claimed_at)}</div>
+            <div class="small">Expires: ${time(claim.expires_at)}</div>
+            <div class="small" style="margin:6px 0 8px;">${escapeHtml(claim.note || '')}</div>
+            <div class="paths">${escapeHtml((claim.paths || []).join('\n'))}</div>
+          </div>
+        `).join('');
+      }
+
+      const chatEvents = [...(state.events || [])]
+        .filter(event => ['post', 'command', 'ack', 'resolve', 'claim', 'release'].includes(event.type))
+        .reverse();
+
+      if (!chatEvents.length) {
+        els.chat.innerHTML = '<div class="empty">No conversation yet.</div>';
+      } else {
+        els.chat.innerHTML = chatEvents.map(event => `
+          <div class="chat-item ${escapeHtml(roleClass(event))}">
+            <div class="chat-head">
+              <div class="chat-role">${escapeHtml(roleLabel(event))}</div>
+              <div class="small">${time(event.timestamp)}</div>
+            </div>
+            <div class="chat-body">${escapeHtml(event.message || '')}</div>
+            ${event.paths && event.paths.length ? `<div class="paths">${escapeHtml(event.paths.join('\n'))}</div>` : ''}
+          </div>
+        `).join('');
+      }
+    }
+
+    async function refresh() {
+      const state = await api('/api/state');
+      render(state);
+    }
+
+    async function handlePost() {
+      const agent = els.agentName.value.trim();
+      const note = els.note.value.trim();
+      if (!agent || !note) {
+        alert('Speaker and message are required.');
+        return;
+      }
+      await api('/api/post', { agent, note });
+      els.note.value = '';
+      await refresh();
+    }
+
+    async function handleStop() {
+      const agent = els.agentName.value.trim() || 'user';
+      await api('/api/command', {
+        agent,
+        targetAgent: 'all',
+        note: 'STOP all work now. Report back here before continuing.'
+      });
+      await refresh();
+    }
+
+    async function handleClaim() {
+      const agent = els.agentName.value.trim();
+      const targets = parseTargets();
+      const ttlMinutes = Number(els.ttl.value || 120);
+      const note = els.claimNote.value.trim();
+      if (!agent || !targets.length) {
+        alert('Speaker and at least one target are required.');
+        return;
+      }
+      await api('/api/claim', { agent, targets, ttlMinutes, note });
+      await refresh();
+    }
+
+    async function handleRelease() {
+      const agent = els.agentName.value.trim();
+      const targets = parseTargets();
+      const note = els.claimNote.value.trim();
+      if (!agent || !targets.length) {
+        alert('Speaker and at least one target are required.');
+        return;
+      }
+      await api('/api/release', { agent, targets, note });
+      await refresh();
+    }
+
+    async function handleAck() {
+      const agent = els.agentName.value.trim();
+      if (!agent) {
+        alert('Speaker is required to acknowledge.');
+        return;
+      }
+      if (!activeCommandId) {
+        alert('No active stop command.');
+        return;
+      }
+      await api('/api/ack', { agent, commandId: activeCommandId, note: 'seen on board' });
+      await refresh();
+    }
+
+    async function handleResolve() {
+      const agent = els.agentName.value.trim() || 'user';
+      if (!activeCommandId) {
+        alert('No active stop command.');
+        return;
+      }
+      await api('/api/resolve', { agent, commandId: activeCommandId, note: 'cleared from board' });
+      await refresh();
+    }
+
+    els.postBtn.addEventListener('click', () => handlePost().catch(err => alert(err.message)));
+    els.stopBtn.addEventListener('click', () => handleStop().catch(err => alert(err.message)));
+    els.claimBtn.addEventListener('click', () => handleClaim().catch(err => alert(err.message)));
+    els.releaseBtn.addEventListener('click', () => handleRelease().catch(err => alert(err.message)));
+    els.refreshBtn.addEventListener('click', () => refresh().catch(err => alert(err.message)));
+    els.ackBtn.addEventListener('click', () => handleAck().catch(err => alert(err.message)));
+    els.resolveBtn.addEventListener('click', () => handleResolve().catch(err => alert(err.message)));
+    els.note.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        handlePost().catch(err => alert(err.message));
+      }
+    });
+
+    refresh().catch(err => {
+      els.statusBar.textContent = err.message;
+    });
+    setInterval(() => refresh().catch(() => {}), 2000);
+  </script>
+</body>
+</html>
