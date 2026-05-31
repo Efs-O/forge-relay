@@ -2,7 +2,7 @@ import { spawnSync } from 'child_process';
 import { Bridge } from './bridge';
 import {
     chatCompletionRaw, dispatchSubagentTier1, resolveModel, ResolvedModel,
-    SubagentBackends, SubagentToolMode, workerAgentName,
+    SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote,
 } from './subagent';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 
@@ -140,23 +140,33 @@ export async function handleDispatchSubagent(
     const context = args.context !== undefined ? String(args.context) : undefined;
     const mode = String(args.mode ?? 'sync') === 'async' ? 'async' : 'sync';
 
+    // #7: validate the backend is reachable before we post "dispatched" or burn a
+    // turn. Fail fast with a clear message if the model server is down; otherwise
+    // carry a routing note (e.g. direct ignores the model id, or the id isn't
+    // served) so the orchestrator knows what actually ran.
+    const resolved = resolveModel(model, backends);
+    const probe = await validateBackend(resolved);
+    if (!probe.reachable) {
+        return `SUBAGENT not dispatched (${model}) — ${probe.message}`;
+    }
+    const modelNote = modelRoutingNote(resolved, probe.models);
+
     // Tier 1 — reasoning-only completion.
     if (requestedTools === 'none') {
         const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context });
         return r.status === 'completed'
-            ? `SUBAGENT ${r.subagentId} (${model}) COMPLETED:\n\n${r.result}`
+            ? `SUBAGENT ${r.subagentId} (${model})${modelNote} COMPLETED:\n\n${r.result}`
             : `SUBAGENT ${r.subagentId} (${model}) ERROR: ${r.error}`;
     }
 
     // Tier 2 — agentic worker loop.
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const worker = workerAgentName(model);
-    const resolved = resolveModel(model, backends);
     const autonomy: WorkerAutonomy = requestedTools === 'readonly' ? 'draft' : bridge.getAutonomyMode();
     const ctx: WorkerToolContext = { repoRoot: bridge.getRepoRoot(), autonomy };
 
     const checkpoint = autonomy === 'clanker' ? gitCheckpoint(ctx.repoRoot) : 'draft mode (no writes)';
-    bridge.post(worker, `started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (${resolved.backend}:${resolved.model}): ${task} | ${checkpoint}`.slice(0, 400));
+    bridge.post(worker, `started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (${resolved.backend}:${resolved.model})${modelNote}: ${task} | ${checkpoint}`.slice(0, 400));
 
     // The worker run, shared by sync and async. In async mode the done/error post
     // @mentions the dispatcher so the wake-on-@mention rule pulls the supervisor
@@ -164,6 +174,10 @@ export async function handleDispatchSubagent(
     // result inline, so we don't mention (and don't double-wake) them.
     const runWork = async (mentionDispatcher: boolean): Promise<WorkerLoopResult> => {
         const wake = mentionDispatcher ? `${dispatcher}: ` : '';
+        // #6: files this worker actually writes get an advisory board claim so its
+        // ownership shows in Active Claims and two workers won't draft the same
+        // file. Released when the worker finishes (even on error/abort).
+        const claimed = new Set<string>();
         try {
             const result = await runWorkerLoop(resolved, ctx, task, context, {
                 shouldAbort: () => {
@@ -179,6 +193,10 @@ export async function handleDispatchSubagent(
                     } else if (res.mutated || name === 'propose_diff') {
                         bridge.post(worker, `${name} ${res.touched ?? ''}: ${res.result.replace(/\s+/g, ' ').slice(0, 160)}`.slice(0, 300));
                     }
+                    if (res.mutated && res.touched && !claimed.has(res.touched)) {
+                        claimed.add(res.touched);
+                        try { bridge.claim(worker, [res.touched], 60, `worker auto-claim ${subagentId.slice(0, 10)}`); } catch { /* advisory — ignore conflicts */ }
+                    }
                 },
             });
             bridge.post(worker, `${wake}done [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools): ${result.finalText.replace(/\s+/g, ' ').slice(0, 180)}`.slice(0, 400));
@@ -187,6 +205,10 @@ export async function handleDispatchSubagent(
             const error = err instanceof Error ? err.message : String(err);
             bridge.post(worker, `${wake}error [${subagentId.slice(0, 10)}]: ${error.replace(/\s+/g, ' ').slice(0, 180)}`.slice(0, 300));
             throw err;
+        } finally {
+            for (const p of claimed) {
+                try { bridge.release(worker, [p], `worker ${subagentId.slice(0, 10)} done`); } catch { /* ignore */ }
+            }
         }
     };
 

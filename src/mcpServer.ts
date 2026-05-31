@@ -11,7 +11,7 @@ import {
 import { BoardWatcher } from './boardWatcher';
 import { Bridge } from './bridge';
 import { BoardEvent, BoardEventNotificationData } from './types';
-import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, SubagentBackends } from './subagent';
+import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
 import { handleDispatchSubagent } from './subagentLoop';
 
 type SseSession = {
@@ -238,6 +238,7 @@ export class McpServer {
                     },
                 },
                 DISPATCH_SUBAGENT_TOOL,
+                LIST_MODELS_TOOL,
             ],
         }));
 
@@ -315,6 +316,10 @@ export class McpServer {
                     case 'dispatch_subagent': {
                         const result = await handleDispatchSubagent(this.bridge, this.subagentBackends, args);
                         return text(result);
+                    }
+
+                    case 'list_models': {
+                        return text(await handleListModels(this.subagentBackends));
                     }
 
                     default:

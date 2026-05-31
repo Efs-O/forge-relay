@@ -145,6 +145,7 @@ const ALLOWED_TOOLS = [
     'mcp__agentwatch__ack_command',
     'mcp__agentwatch__resolve_command',
     'mcp__agentwatch__dispatch_subagent',
+    'mcp__agentwatch__list_models',
     'Read',
     'Edit',
     'Grep',

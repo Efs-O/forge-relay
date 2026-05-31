@@ -37,24 +37,26 @@ Priority key: **P0** = correctness/DX gap found in testing · **P1** = discussed
 
 ## P1 — Discussed enhancements
 
+**Status: #5, #6, #7 ✅ DONE 2026-05-31 (typecheck+build+smoke-test green). #4 still open.**
+
 ### 4. Worker context / token usage display ("ctx: 12k/98k")
 - **Discussed:** user asked whether we can see worker context usage like Forge's sidebar.
 - **Why:** Each dispatch is a fresh context (no carryover), but a long single task accumulates messages and could approach the model window; today the only guard is `maxSteps: 12`.
 - **Approach:** Capture the `usage` block (`prompt_tokens` / `total_tokens`) from each `/v1/chat/completions` response, track cumulative per dispatch, post a `ctx: Nk/Mk` line to the board, warn near the model's `num_ctx`, and optionally add a token budget + auto-summarize old tool results so a runaway worker self-compacts instead of erroring.
 - **Files:** `src/subagent.ts`, `src/subagentLoop.ts`.
 
-### 5. `list_models` MCP tool (autonomous model routing)
+### 5. ✅ `list_models` MCP tool (autonomous model routing)
 - **Discussed:** user wants "use model X for these files, Y for those" — currently the operator must name the model id in the board post.
 - **Why:** Orchestrators can't discover what's available, so they can't route multi-model jobs on their own.
 - **Approach:** New MCP tool that queries each backend's `/v1/models` (bridge `:9099` returns all its GGUFs, Ollama all pulled/cloud tags, llama-server the loaded one) and returns the menu so Claude/Codex can pick per subtask.
 - **Files:** `src/subagent.ts` (tool def + handler), register in `src/mcpServer.ts` + `src/mcpStdio.ts`.
 
-### 6. Worker self-claims its touched paths
+### 6. ✅ Worker self-claims its touched paths
 - **Why:** Workers post lifecycle but don't `claim` the files they write, so the board's Active Claims doesn't show worker ownership and two workers could draft the same file.
 - **Approach:** Have the worker loop `claim` `touched` paths (advisory) on first write and `release` on done.
 - **Files:** `src/subagentLoop.ts`.
 
-### 7. Validate model/endpoint before dispatch
+### 7. ✅ Validate model/endpoint before dispatch
 - **Surfaced:** the `fetch failed` (model unloaded) and the gemma/qwen id mismatch (llama-server ignores the model field, so it silently served Qwen).
 - **Approach:** Before running the loop, hit the backend's `/v1/models` (or `/health`); if the server is down, fail fast with a clear message; if the requested model id isn't served (bridge backend), warn. For `direct:` note that the id is advisory.
 - **Files:** `src/subagentLoop.ts`, `src/subagent.ts`.
@@ -125,6 +127,7 @@ Priority key: **P0** = correctness/DX gap found in testing · **P1** = discussed
 ---
 
 ## Done (for reference — fixed during testing)
+- **P1 #5/#6/#7 (2026-05-31):** (#5) new `list_models` MCP tool — `subagent.ts` `fetchModels()`/`listModels()`/`handleListModels()` GET each backend's `/v1/models` (4s AbortSignal.timeout) and return a backend-prefixed menu, reporting DOWN backends; registered in mcpServer.ts + mcpStdio.ts + claude-auto-bridge ALLOWED_TOOLS. (#7) `validateBackend()` + `modelRoutingNote()`; `handleDispatchSubagent` now probes the resolved backend before dispatch — fail-fast `SUBAGENT not dispatched — could not reach …` if down, and a routing note in the started post (direct ignores the model id; bridge/ollama warn if the id isn't served). Connection errors fail; HTTP errors (e.g. /models unsupported) still proceed. (#6) clanker workers advisory-`claim` each file they actually write (once per path) and `release` on finish (finally, even on error/abort), so Active Claims shows worker ownership. Also de-staled the dispatch_subagent tool description (readonly/full are live). typecheck+build clean; mock-server smoke test green.
 - **P0 #1–3 (2026-05-31):** (#1) win32 `run_command` routes an allowlist of dev tools/builtins (mkdir, npm, npx, node, git, python, tsc, …) through `cmd.exe /d /s /c` via `needsWindowsShell()` in workerDenyList.ts — denylist + shell-operator ban still applied first; timeouts now tree-kill (`taskkill /T /F`) so a stalled npm doesn't orphan node. (#2) `propose_diff` writes the FULL diff to `.coordination/proposals/<path>-<ts>.diff` (git-ignored) and the board posts a short `→ saved to <path>` ref instead of a 160-char slice; `onToolCall` callback now passes the whole `WorkerToolResult`. (#3) `subagent.ts` shared `postChat()` + `describeFetchError()` turn bare `fetch failed` into `could not reach <backend> backend at <url> — is the model server running? (connection refused/…)`. typecheck+build clean; all three smoke-tested green.
 - **P1-UX #13–16 (2026-05-31):** multiline Post Task `<textarea>` (Enter posts, Shift+Enter newline, IME-safe); worker board labels = purple WORKER chip + per-model-tinted short model chip with full id on hover (`agentBadge`/`shortenModel`/`modelTint` in board.js); **non-destructive history** — Clear + new "New Session" button call `bridge.archiveAndReset()` (saves `.coordination/sessions/<id>.ndjson` + `index.json`, re-seeds SESSION_START if a session is active so agents stay linked), session picker loads any saved session read-only (live polling frozen via `viewingSessionId`). Types: `SessionSummary` + `sessionList`/`sessionEvents`/`newSession`/`listSessions`/`loadSession` messages. Wired in boardView.ts + boardPanel.ts (`refreshFeed`). typecheck+build clean; bridge archive/reseed/list/read smoke-tested green. Sessions dir covered by existing `.coordination/` git+vsix ignore.
 - Orphan/zombie codex bridge (Windows `shell:true` kill only reaped `cmd.exe`) → **0.2.5** tree-kill (`taskkill /T /F`) + auto-exit on app-server drop.

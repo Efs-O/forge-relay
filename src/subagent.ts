@@ -148,6 +148,106 @@ export async function chatCompletionRaw(
     return postChat(resolved, { model: resolved.model, stream: false, ...payload }, signal);
 }
 
+// ── Model discovery + endpoint validation (list_models tool + pre-dispatch check) ─
+
+const PROBE_TIMEOUT_MS = 4_000;
+
+/** GET a backend's /models and return the served model ids (OpenAI or Ollama shape). */
+async function fetchModels(baseUrl: string, backend: string, apiKey?: string): Promise<string[]> {
+    const url = `${baseUrl.replace(/\/$/, '')}/models`;
+    const headers: Record<string, string> = {};
+    if (apiKey) { headers['Authorization'] = `Bearer ${apiKey}`; }
+
+    let res: Response;
+    try {
+        res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    } catch (err) {
+        throw new Error(describeFetchError(err, url, backend));
+    }
+    if (!res.ok) {
+        throw new Error(`${backend} backend HTTP ${res.status} at ${url}`);
+    }
+    const data = await res.json().catch(() => ({})) as { data?: Array<{ id?: string }>; models?: Array<{ name?: string }> };
+    const ids = (data.data ?? []).map(m => m.id).filter((x): x is string => Boolean(x));
+    if (ids.length) { return ids; }
+    return (data.models ?? []).map(m => m.name).filter((x): x is string => Boolean(x));
+}
+
+export interface BackendModels {
+    backend: 'bridge' | 'ollama' | 'direct';
+    baseUrl: string;
+    ok: boolean;
+    models?: string[];
+    error?: string;
+}
+
+/** Probe all three backends' /models in parallel for the list_models tool. */
+export async function listModels(backends: SubagentBackends): Promise<BackendModels[]> {
+    const targets: Array<{ backend: BackendModels['backend']; baseUrl: string; apiKey?: string }> = [
+        { backend: 'bridge', baseUrl: backends.bridgeUrl, apiKey: backends.bridgeApiKey },
+        { backend: 'ollama', baseUrl: backends.ollamaUrl },
+        { backend: 'direct', baseUrl: backends.directUrl },
+    ];
+    return Promise.all(targets.map(async (t): Promise<BackendModels> => {
+        try {
+            return { backend: t.backend, baseUrl: t.baseUrl, ok: true, models: await fetchModels(t.baseUrl, t.backend, t.apiKey) };
+        } catch (err) {
+            return { backend: t.backend, baseUrl: t.baseUrl, ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    }));
+}
+
+/** Check whether the resolved backend is reachable (connection-level) before dispatch. */
+export async function validateBackend(resolved: ResolvedModel): Promise<{ reachable: boolean; message: string; models?: string[] }> {
+    try {
+        const models = await fetchModels(resolved.baseUrl, resolved.backend, resolved.apiKey);
+        return { reachable: true, message: '', models };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // "could not reach …" is a connection-level failure (server down) → not
+        // reachable. An HTTP error means something IS listening (e.g. /models
+        // unsupported) → treat as reachable and let the dispatch proceed.
+        return { reachable: !msg.startsWith('could not reach'), message: msg };
+    }
+}
+
+/** A short advisory note about model routing, given what the backend actually serves. */
+export function modelRoutingNote(resolved: ResolvedModel, served?: string[]): string {
+    if (!served || served.length === 0) { return ''; }
+    if (resolved.backend === 'direct') {
+        return ` (note: direct backend serves "${served[0]}" and ignores the requested model id)`;
+    }
+    if (!served.includes(resolved.model)) {
+        return ` (warning: "${resolved.model}" not in ${resolved.backend} model list: ${served.slice(0, 6).join(', ')})`;
+    }
+    return '';
+}
+
+/** Human-readable model menu for the list_models tool. */
+export async function handleListModels(backends: SubagentBackends): Promise<string> {
+    const results = await listModels(backends);
+    const blocks = results.map(r => {
+        if (!r.ok) { return `${r.backend} @ ${r.baseUrl} — DOWN: ${r.error}`; }
+        const list = r.models && r.models.length
+            ? r.models.map(m => `  ${r.backend}:${m}`).join('\n')
+            : '  (reachable, but no models reported)';
+        return `${r.backend} @ ${r.baseUrl} — UP:\n${list}`;
+    });
+    return `AVAILABLE WORKER MODELS — pass to dispatch_subagent as "<backend>:<model>":\n\n${blocks.join('\n\n')}`;
+}
+
+export const LIST_MODELS_TOOL = {
+    name: 'list_models',
+    description:
+        'List worker models available across the local backends (bridge :9099, ollama :11434, direct llama-server :8080). '
+        + 'Use it to discover what you can pass to dispatch_subagent (as "<backend>:<model>") and to route multi-model jobs. '
+        + 'Backends that are down are reported so you can pick a live one.',
+    inputSchema: {
+        type: 'object',
+        properties: { agent: { type: 'string', description: 'Your agent identity.' } },
+    },
+} as const;
+
 const TIER1_SYSTEM_PROMPT = [
     'You are a focused worker subagent dispatched by an orchestrator on a shared coding board.',
     'Complete the single task you are given and return a concise, self-contained result.',
@@ -210,8 +310,8 @@ export const DISPATCH_SUBAGENT_TOOL = {
     description:
         'Delegate a self-contained task to a local model worker (Forge/Ollama/llama.cpp), like a Task subagent. '
         + 'Returns the worker result and posts its lifecycle to the AgentWatch board as worker:<model>. '
-        + 'model may be backend-prefixed: "ollama:qwen2.5-coder", "bridge:gemma", "direct:foo". '
-        + 'tools: "none" = reasoning-only single completion (available now); "readonly"/"full" = tool-using worker (arriving in a later update).',
+        + 'model may be backend-prefixed: "ollama:qwen2.5-coder", "bridge:gemma", "direct:foo" (use list_models to discover what is available). '
+        + 'tools: "none" = reasoning-only single completion; "readonly" = read/search + propose_diff (no writes); "full" = read/write/edit/run, bounded by the destructive-command denylist and the board autonomy mode.',
     inputSchema: {
         type: 'object',
         properties: {

@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Bridge } from './bridge';
 import { EventTail } from './eventTail';
-import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, SubagentBackends } from './subagent';
+import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
 import { handleDispatchSubagent } from './subagentLoop';
 
 // --repoRoot <path>  (defaults to cwd)
@@ -97,6 +97,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             },
         },
         DISPATCH_SUBAGENT_TOOL,
+        LIST_MODELS_TOOL,
     ],
 }));
 
@@ -152,6 +153,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToo
             case 'dispatch_subagent': {
                 const result = await handleDispatchSubagent(bridge, subagentBackends, args);
                 return text(result);
+            }
+            case 'list_models': {
+                return text(await handleListModels(subagentBackends));
             }
             default:
                 return text(`Unknown tool: ${request.params.name}`);
