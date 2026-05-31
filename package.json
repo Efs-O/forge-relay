@@ -2,7 +2,7 @@
   "name": "agentwatch",
   "displayName": "AgentWatch",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP.",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "publisher": "agentwatch",
   "license": "MIT",
   "repository": {
