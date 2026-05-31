@@ -2,7 +2,7 @@
   "name": "agentwatch",
   "displayName": "AgentWatch",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP.",
-  "version": "0.1.0",
+  "version": "0.2.5",
   "publisher": "agentwatch",
   "license": "MIT",
   "repository": {
@@ -32,6 +32,7 @@
           "type": "webview",
           "id": "agentwatch.boardView",
           "name": "Board",
+          "icon": "media/icon.svg",
           "when": "workspaceFolderCount > 0"
         }
       ]
@@ -48,6 +49,18 @@
       {
         "command": "agentwatch.showMcpConfig",
         "title": "AgentWatch: Show MCP Config"
+      },
+      {
+        "command": "agentwatch.verifySetup",
+        "title": "AgentWatch: Verify Setup"
+      },
+      {
+        "command": "agentwatch.toggleCodexBridge",
+        "title": "AgentWatch: Connect/Disconnect Codex Runtime Bridge"
+      },
+      {
+        "command": "agentwatch.toggleClanker",
+        "title": "AgentWatch: Toggle Clanker Mode (worker write/edit/run)"
       }
     ],
     "configuration": {
@@ -67,6 +80,54 @@
           "type": "string",
           "default": "",
           "description": "Absolute path to the repo being coordinated. Leave empty to use the current workspace folder."
+        },
+        "agentwatch.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Node.js binary used to run the runtime bridges. Leave empty to use 'node' from PATH."
+        },
+        "agentwatch.claudePermissionMode": {
+          "type": "string",
+          "default": "acceptEdits",
+          "enum": ["default", "acceptEdits", "bypassPermissions", "plan"],
+          "description": "Permission mode for the headless Claude (Mode B) runtime bridge. 'acceptEdits' lets it act on the board without prompts; 'bypassPermissions' is fully unattended but less safe."
+        },
+        "agentwatch.claudeModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model override for the headless Claude (Mode B) runtime bridge. Leave empty to use your Claude Code default."
+        },
+        "agentwatch.subagentBridgeUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:9099/v1",
+          "description": "OpenAI-compatible base URL for the continue-llamacpp-bridge backend used by dispatch_subagent (model id selects the GGUF)."
+        },
+        "agentwatch.subagentOllamaUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434/v1",
+          "description": "OpenAI-compatible base URL for the Ollama backend used by dispatch_subagent (prefix a model with 'ollama:')."
+        },
+        "agentwatch.subagentDirectUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080/v1",
+          "description": "OpenAI-compatible base URL for the direct llama.cpp llama-server backend (prefix a model with 'direct:')."
+        },
+        "agentwatch.subagentBridgeApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the bridge backend, if it requires one."
+        },
+        "agentwatch.subagentDefaultBackend": {
+          "type": "string",
+          "default": "bridge",
+          "enum": ["bridge", "ollama", "direct"],
+          "description": "Which backend an unprefixed dispatch_subagent model id targets."
+        },
+        "agentwatch.defaultAutonomy": {
+          "type": "string",
+          "default": "draft",
+          "enum": ["draft", "clanker"],
+          "description": "Initial worker autonomy. 'draft' = workers are read-only and propose diffs (safe). 'clanker' = workers may write/edit/run directly, bounded by the destructive-command denylist. Toggle live with the 💥 board pill or the Toggle Clanker Mode command."
         }
       }
     }
@@ -75,7 +136,8 @@
     "vscode:prepublish": "node esbuild.js --production",
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "codex:auto": "node scripts/codex-auto-bridge.js --repo-root ."
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

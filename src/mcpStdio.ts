@@ -2,10 +2,10 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import * as fs from 'fs';
-import * as path from 'path';
 import { Bridge } from './bridge';
-import { BoardEvent } from './types';
+import { EventTail } from './eventTail';
+import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, SubagentBackends } from './subagent';
+import { handleDispatchSubagent } from './subagentLoop';
 
 // --repoRoot <path>  (defaults to cwd)
 const repoRootArg = process.argv.indexOf('--repoRoot');
@@ -14,7 +14,20 @@ const repoRoot = repoRootArg !== -1
     : process.cwd();
 
 const bridge = new Bridge(repoRoot);
-const eventsPath = path.join(repoRoot, '.coordination', 'events.ndjson');
+// B7: single source of truth for the coordination dir — ask the bridge rather
+// than recomputing the path here, so the two can never drift apart.
+const eventsPath = bridge.getEventsPath();
+
+// Subagent backends — defaults can be overridden via env vars so Codex (which
+// spawns this stdio server itself) can point at the same endpoints as the
+// extension without sharing VS Code settings.
+const subagentBackends: SubagentBackends = {
+    bridgeUrl: process.env.AGENTWATCH_BRIDGE_URL || DEFAULT_SUBAGENT_BACKENDS.bridgeUrl,
+    ollamaUrl: process.env.AGENTWATCH_OLLAMA_URL || DEFAULT_SUBAGENT_BACKENDS.ollamaUrl,
+    directUrl: process.env.AGENTWATCH_DIRECT_URL || DEFAULT_SUBAGENT_BACKENDS.directUrl,
+    bridgeApiKey: process.env.AGENTWATCH_BRIDGE_API_KEY || undefined,
+    defaultBackend: (process.env.AGENTWATCH_DEFAULT_BACKEND as SubagentBackends['defaultBackend']) || DEFAULT_SUBAGENT_BACKENDS.defaultBackend,
+};
 
 const server = new Server(
     { name: 'agentwatch', version: '0.1.0' },
@@ -83,6 +96,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 required: ['agent', 'command_id'],
             },
         },
+        DISPATCH_SUBAGENT_TOOL,
     ],
 }));
 
@@ -135,6 +149,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToo
                 bridge.resolve(str(args.agent), str(args.command_id), str(args.note ?? ''));
                 return text(`RESOLVED ${str(args.command_id)}`);
             }
+            case 'dispatch_subagent': {
+                const result = await handleDispatchSubagent(bridge, subagentBackends, args);
+                return text(result);
+            }
             default:
                 return text(`Unknown tool: ${request.params.name}`);
         }
@@ -147,35 +165,23 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
 
-    // Watch events.ndjson and push MCP notifications to the connected client
-    let lastSize = 0;
-    try {
-        lastSize = fs.existsSync(eventsPath) ? fs.statSync(eventsPath).size : 0;
-    } catch { /* ignore */ }
-
-    fs.watchFile(eventsPath, { interval: 500 }, (curr) => {
-        if (curr.size <= lastSize) { return; }
-        try {
-            const full = fs.readFileSync(eventsPath);
-            const chunkStr = full.slice(lastSize).toString('utf8');
-            lastSize = curr.size;
-            for (const line of chunkStr.split('\n')) {
-                const l = line.trim();
-                if (!l) { continue; }
-                try {
-                    const event: BoardEvent = JSON.parse(l);
-                    server.notification({
-                        method: 'notifications/message',
-                        params: {
-                            level: /\bSTOP\b/i.test(event.message) ? 'alert' : 'info',
-                            logger: 'agentwatch.board',
-                            data: { type: 'board_event', event },
-                        },
-                    });
-                } catch { /* malformed line */ }
-            }
-        } catch { /* ignore read errors */ }
-    });
+    // B5: tail events.ndjson via the shared EventTail and push MCP notifications
+    // to the connected client. EventTail handles rotation/truncation/partial
+    // lines, so this loop stays trivial.
+    const tail = new EventTail(eventsPath);
+    const timer = setInterval(() => {
+        for (const event of tail.readNew()) {
+            server.notification({
+                method: 'notifications/message',
+                params: {
+                    level: /\bSTOP\b/i.test(event.message) ? 'alert' : 'info',
+                    logger: 'agentwatch.board',
+                    data: { type: 'board_event', event },
+                },
+            });
+        }
+    }, 500);
+    timer.unref?.();
 }
 
 main().catch(err => {

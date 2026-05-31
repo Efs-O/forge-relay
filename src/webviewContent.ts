@@ -1,8 +1,26 @@
 import * as vscode from 'vscode';
+import { ClaudeMode, SessionRoster } from './types';
 
 export function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+/** Human-readable notice describing what Connect just started, given the roster. */
+export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode): string {
+    if (!roster.claude && !roster.codex) {
+        return 'No orchestrator selected — session posted but no agent will react.';
+    }
+    const parts: string[] = [];
+    if (roster.codex) {
+        parts.push('Codex runtime bridge connecting');
+    }
+    if (roster.claude) {
+        parts.push(claudeMode === 'A'
+            ? 'paste the Claude /loop prompt to start Claude'
+            : 'Claude headless bridge starting');
+    }
+    return `Session started — ${parts.join('; ')}.`;
 }
 
 export function getWebviewHtml(
@@ -28,57 +46,182 @@ export function getWebviewHtml(
 </head>
 <body>
     <div id="app">
-        <header>
-            <h1>AgentWatch</h1>
-            <span id="mcp-port" class="badge"></span>
-            <div id="stop-banner" class="hidden">&#9632; STOP ACTIVE</div>
+        <header class="topbar">
+            <div class="brand">
+                <h1>AgentWatch</h1>
+                <p class="subtitle">Shared coordination session for Claude and Codex</p>
+            </div>
+            <div class="topbar-meta">
+                <span id="mcp-port" class="badge"></span>
+                <button id="autonomy-pill" class="autonomy-pill draft" title="Toggle worker autonomy. Draft = read-only + propose diffs. Clanker = workers write/edit/run (destructive commands still blocked).">Workers: Draft</button>
+                <span id="last-activity" class="meta-text">Last activity: none</span>
+            </div>
         </header>
 
-        <section id="claims-section">
-            <h2>Active Claims</h2>
-            <div id="claims-list" class="empty-msg">No active claims.</div>
+        <section id="status-section" class="status-section">
+            <div class="status-grid">
+                <article class="status-card" data-agent="claude">
+                    <div class="status-head">
+                        <span class="status-dot" id="status-dot-claude"></span>
+                        <div>
+                            <h2>Claude</h2>
+                            <p id="status-text-claude" class="status-text">Stopped</p>
+                        </div>
+                    </div>
+                    <p id="status-detail-claude" class="status-detail">No board activity yet.</p>
+                </article>
+
+                <article class="status-card" data-agent="codex">
+                    <div class="status-head">
+                        <span class="status-dot" id="status-dot-codex"></span>
+                        <div>
+                            <h2>Codex</h2>
+                            <p id="status-text-codex" class="status-text">Stopped</p>
+                        </div>
+                    </div>
+                    <p id="status-detail-codex" class="status-detail">No board activity yet.</p>
+                </article>
+            </div>
+
+            <div class="session-actions">
+                <button id="btn-connect" class="primary">Connect</button>
+                <button id="btn-disconnect">Disconnect</button>
+            </div>
         </section>
 
-        <section id="commands-section">
-            <h2>Open Commands</h2>
-            <div id="commands-list" class="empty-msg">No open commands.</div>
+        <div id="message-banner" class="message-banner hidden"></div>
+
+        <section id="task-section" class="task-section">
+            <div class="section-head">
+                <h2>Post Task</h2>
+                <p>Post the real implementation request here once both agents are running.</p>
+            </div>
+            <div class="task-row">
+                <textarea id="ctrl-note" rows="4" placeholder="Describe the task, plan file, or handoff. Enter to post · Shift+Enter for a new line."></textarea>
+                <button id="btn-post-task" class="primary">Post</button>
+            </div>
         </section>
 
-        <section id="feed-section">
-            <h2>Event Feed</h2>
-            <div id="event-feed"></div>
-        </section>
+        <main class="main-grid">
+            <section id="feed-section" class="panel-section feed-section">
+                <div class="section-head">
+                    <div>
+                        <h2>Live Board Feed</h2>
+                        <p>Claims, progress, blockers, and coordination.</p>
+                    </div>
+                    <div class="feed-actions">
+                        <select id="session-picker" title="View a saved session (read-only) or return to the live board">
+                            <option value="live">● Live session</option>
+                        </select>
+                        <button id="btn-new-session" class="small" title="Save the current feed as a session and start a fresh one. Nothing is deleted.">New Session</button>
+                        <button id="btn-clear-history" class="small" title="Archive the current feed to a saved session, then clear it. Non-destructive.">Clear</button>
+                    </div>
+                </div>
+                <div id="viewing-banner" class="viewing-banner hidden">
+                    <span id="viewing-banner-text">Viewing a saved session (read-only).</span>
+                    <button id="btn-back-to-live" class="small">Back to live</button>
+                </div>
+                <div id="event-feed" class="event-feed"></div>
+                <div id="feed-empty" class="empty-msg">No events yet.</div>
+            </section>
 
-        <section id="controls-section">
-            <h2>Controls</h2>
-            <div class="control-row">
-                <label>Agent</label>
-                <input id="ctrl-agent" type="text" placeholder="claude / codex / user" value="user">
-            </div>
-            <div class="control-row">
-                <label>Message</label>
-                <input id="ctrl-note" type="text" placeholder="Progress note">
-                <button id="btn-post">Post</button>
-            </div>
-            <div class="control-row">
-                <label>Target</label>
-                <input id="ctrl-target" type="text" placeholder="Repo-relative path">
-                <button id="btn-claim">Claim</button>
-                <button id="btn-release">Release</button>
-            </div>
-            <div class="control-row stop-row">
-                <label>Operator</label>
-                <select id="ctrl-cmd-target">
-                    <option value="all">All agents</option>
-                    <option value="claude">claude</option>
-                    <option value="codex">codex</option>
-                </select>
-                <button id="btn-stop" class="danger">STOP</button>
-                <button id="btn-pause" class="warning">PAUSE</button>
-                <button id="btn-resume">RESUME</button>
-            </div>
-        </section>
+            <aside class="side-stack">
+                <section id="claims-section" class="panel-section">
+                    <div class="section-head">
+                        <h2>Active Claims</h2>
+                        <p>Recent ownership to avoid collisions.</p>
+                    </div>
+                    <div id="claims-list" class="empty-msg">No active claims.</div>
+                </section>
+
+                <section id="commands-section" class="panel-section">
+                    <div class="section-head commands-head">
+                        <div>
+                            <h2>Open Commands</h2>
+                            <p>STOP and PAUSE control state.</p>
+                        </div>
+                        <button id="btn-clear-commands" class="small">Clear All Commands</button>
+                    </div>
+                    <div id="commands-list" class="empty-msg">No open commands.</div>
+                </section>
+
+                <section id="manual-section" class="panel-section">
+                    <div class="section-head">
+                        <h2>Manual Board Actions</h2>
+                        <p>Fallback tools for direct board operations.</p>
+                    </div>
+                    <div class="control-row">
+                        <label for="ctrl-agent">Agent</label>
+                        <input id="ctrl-agent" type="text" placeholder="claude / codex / user" value="user">
+                    </div>
+                    <div class="control-row">
+                        <label for="ctrl-target">Target</label>
+                        <input id="ctrl-target" type="text" placeholder="Repo-relative path">
+                    </div>
+                    <div class="button-row">
+                        <button id="btn-claim">Claim</button>
+                        <button id="btn-release">Release</button>
+                    </div>
+                    <div class="control-row">
+                        <label for="ctrl-cmd-target">Command</label>
+                        <select id="ctrl-cmd-target">
+                            <option value="all">All agents</option>
+                            <option value="claude">claude</option>
+                            <option value="codex">codex</option>
+                        </select>
+                    </div>
+                    <div class="button-row">
+                        <button id="btn-stop" class="danger">STOP</button>
+                        <button id="btn-pause" class="warning">PAUSE</button>
+                    </div>
+                </section>
+            </aside>
+        </main>
     </div>
+
+    <div id="connect-modal" class="modal hidden" aria-hidden="true">
+        <div class="modal-card">
+            <div class="modal-head">
+                <div>
+                    <h2>Start Agent Session</h2>
+                    <p>Choose which orchestrators participate. Only selected agents react to the board; the rest stay inactive.</p>
+                </div>
+                <button id="btn-close-modal" class="icon-button" aria-label="Close">×</button>
+            </div>
+
+            <div class="roster-block">
+                <h3>Orchestrators</h3>
+                <label class="check-row"><input type="checkbox" id="roster-claude" checked> Claude</label>
+                <label class="check-row"><input type="checkbox" id="roster-codex" checked> Codex</label>
+            </div>
+
+            <div class="mode-block" id="claude-mode-block">
+                <h3>Claude mode</h3>
+                <label class="check-row"><input type="radio" name="claude-mode" value="A" checked> Mode A — paste <code>/loop</code> into your open Claude chat</label>
+                <label class="check-row"><input type="radio" name="claude-mode" value="B"> Mode B — headless bridge (zero paste, uses your Claude Code login)</label>
+            </div>
+
+            <div class="prompt-block" id="claude-prompt-block">
+                <div class="prompt-head">
+                    <h3>Claude Code — paste this once</h3>
+                    <button id="btn-copy-claude" class="small">Copy</button>
+                </div>
+                <pre id="prompt-claude" class="prompt-text"></pre>
+            </div>
+
+            <div class="prompt-block" id="codex-info-block">
+                <div class="prompt-head">
+                    <h3>Codex</h3>
+                </div>
+                <p class="prompt-note">Codex starts automatically via the AgentWatch runtime bridge — no paste needed.</p>
+            </div>
+
+            <div class="modal-actions">
+                <button id="btn-confirm-connect" class="primary">Start session</button>
+            </div>
+        </div>
+    </div>
+
     <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;

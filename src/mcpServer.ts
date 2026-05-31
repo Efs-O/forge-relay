@@ -11,6 +11,8 @@ import {
 import { BoardWatcher } from './boardWatcher';
 import { Bridge } from './bridge';
 import { BoardEvent, BoardEventNotificationData } from './types';
+import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, SubagentBackends } from './subagent';
+import { handleDispatchSubagent } from './subagentLoop';
 
 type SseSession = {
     server: Server;
@@ -24,14 +26,16 @@ type StreamableSession = {
 
 export class McpServer {
     private readonly bridge: Bridge;
+    private readonly subagentBackends: SubagentBackends;
     private httpServer: http.Server | null = null;
     private readonly sseSessions = new Map<string, SseSession>();
     private readonly streamableSessions = new Map<string, StreamableSession>();
     private boardWatcher: BoardWatcher | null = null;
     private port = 7878;
 
-    constructor(bridge: Bridge) {
+    constructor(bridge: Bridge, subagentBackends: SubagentBackends = DEFAULT_SUBAGENT_BACKENDS) {
         this.bridge = bridge;
+        this.subagentBackends = subagentBackends;
     }
 
     start(port: number): void {
@@ -233,6 +237,7 @@ export class McpServer {
                         required: ['agent', 'command_id'],
                     },
                 },
+                DISPATCH_SUBAGENT_TOOL,
             ],
         }));
 
@@ -305,6 +310,11 @@ export class McpServer {
                         const note = str(args.note ?? '');
                         this.bridge.resolve(agent, commandId, note);
                         return text(`RESOLVED ${commandId}`);
+                    }
+
+                    case 'dispatch_subagent': {
+                        const result = await handleDispatchSubagent(this.bridge, this.subagentBackends, args);
+                        return text(result);
                     }
 
                     default:

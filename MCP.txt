@@ -1,0 +1,221 @@
+Claude Code (Anthropic’s coding agent) has strong support for real-time monitoring of state changes, primarily through two key features:
+
+### 1. Monitor Tool (Built-in)
+
+- This is a dedicated tool in Claude Code that lets the agent monitor background processes, logs, files, or other state changes.
+- Instead of inefficient polling loops, it uses an interrupt-driven approach: Claude registers interest in certain events (e.g., file changes, process completion, specific log patterns, errors, or state updates), and gets notified when something happens.
+- This is excellent for real-time monitoring without wasting tokens on repeated checks.
+
+### 2. /loop Command
+
+- Claude Code shipped a `/loop` feature that allows scheduling recurring tasks or long-running monitoring sessions (up to several days).
+- You can combine `/loop` with MCP tools or the Monitor tool to create persistent monitoring workflows (e.g., “babysit my PRs and auto-fix issues”, monitor deployments, watch Slack/ logs, etc.).
+
+### How it relates to MCP:
+
+MCP servers can provide tools that feed into these monitoring capabilities. Claude Code’s agent loop (the cycle of tool calls + reasoning) works very well with MCP, allowing seamless real-time interaction with external systems.
+
+Summary: Yes — Claude Code has excellent built-in support for real-time state monitoring via the Monitor tool and /loop, going beyond basic MCP tool calling.
+
+Would you like examples of how to set this up?
+
+Yes, but it’s not as built-in or seamless as Claude Code’s Monitor tool + `/loop`.
+
+### Here’s the current state (as of May 2026):
+
+|Feature                          |Claude Code           |OpenAI Codex                            |Winner     |
+|---------------------------------|----------------------|----------------------------------------|-----------|
+|Dedicated real-time Monitor tool |Yes (native)          |No native equivalent                    |Claude Code|
+|Persistent / Loop monitoring     |`/loop` + Monitor tool|`/goal` (experimental) + community tools|Claude Code|
+|Long-running task support        |Excellent             |Good (via `/goal` + MCP)                |Tie        |
+|Real-time state change monitoring|Strong native support |Via external MCP servers                |Claude Code|
+
+### What Codex actually offers:
+
+1. `/goal` command (closest equivalent)
+- Often called the “Ralph Loop” by the community.
+- Allows you to give Codex a high-level goal and let it run autonomously with a validation loop.
+- It can iterate, check results, and continue working — similar in spirit to Claude’s loop.
+2. MCP-based monitoring
+- Codex does not have a built-in Monitor tool.
+- Instead, you connect MCP servers that provide monitoring capabilities, such as:
+  - `background-process-mcp` (start, monitor, and get notifications from long-running processes)
+  - Observability MCPs (Datadog, Sentry, custom log monitors, etc.)
+  - Custom MCP servers for file watching, deployment monitoring, etc.
+3. Agent Loop + External Tools
+- Codex has a strong agent loop for long-horizon tasks.
+- You can achieve similar real-time monitoring by combining `/goal` with MCP tools that support streaming or notifications.
+
+### Bottom line:
+
+- Claude Code is currently better for native real-time monitoring and looping.
+- Codex is catching up fast with `/goal` and has excellent MCP client support, but it relies more on external MCP servers rather than having polished built-in monitoring tools.
+
+Would you like me to show you:
+
+- How to set up a good monitoring workflow in Codex using MCP?
+- Or the best background-process MCP server for Codex?
+
+Let me know your use case and I can give you a concrete setup.
+
+Got it! Let me clarify what I meant by “external MCP servers” and how it works locally.
+
+### What “External MCP Server” Means
+
+It doesn’t mean a cloud/remote server.  
+It means a separate small program (the MCP server) that runs on your computer (local). Codex talks to it via STDIO (standard input/output) — basically launching it as a child process.
+
+This is the recommended and best-supported way for local tools in Codex.
+
+### Local Real-Time / Background Monitoring in Codex
+
+Codex doesn’t have a built-in “Monitor tool” like Claude Code, but you can achieve very similar results using a local MCP server designed for this purpose.
+
+#### Best Option: `background-process-mcp`
+
+This is a popular local MCP server that lets Codex:
+
+- Start long-running commands/processes
+- Monitor their output in real-time
+- Check status, logs, stop them, etc.
+- Works great with Codex’s `/goal` loop
+
+How to install and add it locally:
+ Add this to your `~/.codex/config.toml`: 
+toml
+[mcp_servers.backgroundProcess]
+command = "npx"
+args = ["@waylaidwanderer/background-process-mcp@latest"]
+
+ Restart Codex (or run `codex mcp refresh`). 
+Once added, Codex can use tools from this MCP server to start a process and monitor it without constant polling.
+
+### Other Good Local Monitoring Options
+
+- Filesystem watchers (via other MCP servers)
+- Custom simple MCP servers (many people write their own in Node.js/Python for specific needs like watching logs or file changes)
+
+### Summary for You
+
+- You can do everything locally — no need for remote/cloud servers.
+- Use STDIO-type MCP servers (they run as local processes).
+- Combine the background-process-mcp with Codex’s `/goal` for monitoring behavior similar to Claude’s Monitor + Loop.
+
+Would you like me to give you the exact steps + example commands for setting up background monitoring in your project?
+
+
+Got it! Let me clarify what I meant by “external MCP servers” and how it works locally.
+
+### What “External MCP Server” Means
+
+It doesn’t mean a cloud/remote server.  
+It means a separate small program (the MCP server) that runs on your computer (local). Codex talks to it via STDIO (standard input/output) — basically launching it as a child process.
+
+This is the recommended and best-supported way for local tools in Codex.
+
+### Local Real-Time / Background Monitoring in Codex
+
+Codex doesn’t have a built-in “Monitor tool” like Claude Code, but you can achieve very similar results using a local MCP server designed for this purpose.
+
+#### Best Option: `background-process-mcp`
+
+This is a popular local MCP server that lets Codex:
+
+- Start long-running commands/processes
+- Monitor their output in real-time
+- Check status, logs, stop them, etc.
+- Works great with Codex’s `/goal` loop
+
+How to install and add it locally:
+ Add this to your `~/.codex/config.toml`: 
+toml
+[mcp_servers.backgroundProcess]
+command = "npx"
+args = ["@waylaidwanderer/background-process-mcp@latest"]
+
+ Restart Codex (or run `codex mcp refresh`). 
+Once added, Codex can use tools from this MCP server to start a process and monitor it without constant polling.
+
+### Other Good Local Monitoring Options
+
+- Filesystem watchers (via other MCP servers)
+- Custom simple MCP servers (many people write their own in Node.js/Python for specific needs like watching logs or file changes)
+
+### Summary for You
+
+- You can do everything locally — no need for remote/cloud servers.
+- Use STDIO-type MCP servers (they run as local processes).
+- Combine the background-process-mcp with Codex’s `/goal` for monitoring behavior similar to Claude’s Monitor + Loop.
+
+Would you like me to give you the exact steps + example commands for setting up background monitoring in your project?
+
+Got it! You want the supervised chat board (where Claude Code and Codex talk to each other) to happen inside VS Code.
+
+This is very doable in 2026 — VS Code has become a strong multi-agent hub.
+
+### Recommended Setup for VS Code
+
+Here’s the cleanest way to get a shared, visible chat board:
+
+#### 1. Use Agent Room MCP Server (Best for Shared Chat Board)
+
+This is an open-source MCP server specifically built for multiple agents to talk in one shared room.
+
+- Both Claude Code and Codex join the same room.
+- Their conversation appears live in a shared space.
+- You supervise everything directly in VS Code.
+
+Steps:
+ Install the official OpenAI Codex extension and the Claude Code extension in VS Code. Add the Agent Room MCP server (local):
+   
+   For Codex (`/.codex/config.toml`):
+   
+   toml
+   [mcp_servers.agentRoom]
+   command = "npx"
+   args = ["agent-room-mcp@latest"]
+   
+   
+   For Claude Code (in Claude’s MCP config, usually `/.claude/mcp.json` or via the extension):
+   
+   json
+   {
+     "mcpServers": {
+       "agentRoom": {
+         "command": "npx",
+         "args": ["agent-room-mcp@latest"]
+       }
+     }
+   }
+    Restart both extensions or refresh MCP servers. In either agent, start/join a room (it gives a short code like `X7K9P2M`). Tell the other agent to join the same room. You can watch the full conversation in the chat panel of either extension, or open both side-by-side in VS Code. #### 2. Alternative: Codex Plugin for Claude Code (Simpler Bidirectional)
+
+If you prefer one main interface:
+
+- Install the Codex Plugin inside Claude Code.
+- Claude can directly call Codex as a tool.
+- Their back-and-forth happens inside the Claude Code panel in VS Code.
+- You supervise from one window.
+
+This is lighter if you want Claude as the “leader”.
+
+### Supervision Tips in VS Code
+
+- Open both Claude Code and Codex panels side-by-side (split editor).
+- Use VS Code’s Agent Sessions view (new in 2026) to monitor multiple agents.
+- Use tmux or Cmux in the integrated terminal if you want extra visibility.
+
+Would you like the exact installation commands + sample prompts to start the conversation between them?
+
+Also tell me:
+
+- macOS, Windows, or Linux?
+- Do you want Claude leading, Codex leading, or fully equal?
+
+I can give you the precise config files.
+
+https://developers.openai.com/codex/mcp
+
+
+
+
+

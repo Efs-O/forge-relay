@@ -25,7 +25,7 @@ There is no database, no cloud service, no API keys required beyond what the age
 - **VS Code sidebar** — always-visible board panel in the Activity Bar
 - **Tab panel** — larger view via `AgentWatch: Open Board (Tab)` command
 - **MCP server** — starts automatically on port 7878 when VS Code opens
-- **Auto-config** — writes `.mcp.json` into your workspace so agents connect with zero manual setup
+- **Manual setup guidance** — surfaces copy-ready MCP config snippets without mutating workspace or home config
 - **File claims** — agents claim files or folders before editing; the board blocks conflicting claims
 - **TTL expiry** — claims expire automatically after 120 minutes (configurable) so a crashed agent cannot block forever
 - **Event feed** — append-only log of every claim, release, post, command, and acknowledgement
@@ -42,8 +42,8 @@ VS Code Extension
 ├── Tab panel (WebviewPanel) ──────────────── on demand, larger view
 └── MCP server (Node.js HTTP/SSE, :7878)
         │
-        ├── Claude Code CLI ──── reads .mcp.json, calls MCP tools
-        ├── Codex CLI ────────── reads .mcp.json, calls MCP tools
+        ├── Claude Code CLI ──── reads configured MCP settings, calls MCP tools
+        ├── Codex CLI ────────── reads configured MCP settings, calls MCP tools
         └── (any MCP agent)
 
 State: .coordination/
@@ -78,7 +78,41 @@ code --extensionDevelopmentPath="N:\vs code apps\Agentwatch" "C:\path\to\your\wo
 
 ## Agent Setup
 
-When AgentWatch activates it automatically writes `.mcp.json` into your workspace root:
+AgentWatch does not write MCP config into your workspace or home directory.
+
+Use **Command Palette -> AgentWatch: Show MCP Config** to view the exact snippets for this machine.
+Use **Command Palette -> AgentWatch: Verify Setup** to check whether this machine is ready.
+
+### First-time setup on a new machine
+
+AgentWatch handles these automatically once the extension is installed:
+
+- ships its own UI metadata such as icons and commands
+- starts the local AgentWatch MCP server when VS Code opens the workspace
+- includes repo-owned helper scripts such as `npm run codex:auto`
+
+You still need to configure these manually for each machine:
+
+- add the AgentWatch MCP block to Codex `config.toml`
+- add the AgentWatch MCP block to the Claude `settings.json` file you want to use
+
+Reason: AgentWatch intentionally does not silently edit user home config or workspace agent settings during activation.
+
+Codex uses `C:\Users\efso office\.codex\config.toml`:
+
+```toml
+[mcp_servers.agentwatch]
+command = "node"
+args = ["N:/vs code apps/Agentwatch/out/mcpStdio.js", "--repoRoot", "N:/vs code apps/Agentwatch"]
+```
+
+Claude Code reads `settings.json` style config files. In this environment the observed locations are:
+
+- `C:\Users\efso office\.claude\settings.json`
+- `N:\vs code apps\Agentwatch\.claude\settings.json`
+- `N:\vs code apps\Agentwatch\.claude\settings.local.json`
+
+Add or merge this into the Claude settings file you want to use:
 
 ```json
 {
@@ -91,9 +125,36 @@ When AgentWatch activates it automatically writes `.mcp.json` into your workspac
 }
 ```
 
-Any Claude Code or Codex CLI session started inside that workspace will pick this up automatically — no manual configuration needed.
+If Claude stops launching after a workspace-level config change, rename workspace `.claude/settings.json` first, then `.claude/settings.local.json` if needed. Prefer renaming over deleting so rollback is immediate.
 
-To see the config at any time: **Command Palette → AgentWatch: Show MCP Config**
+### Codex inbound bridge
+
+Codex has a supported inbound trigger path through the documented `codex app-server` JSON-RPC interface. AgentWatch now ships a bridge wrapper that:
+
+- starts `codex app-server`
+- opens a Codex thread inside the repo
+- watches `.coordination/events.ndjson`
+- forwards matching board events into Codex with `turn/start`
+- lets Codex answer back through the existing AgentWatch MCP tools
+
+Run it from the repo root:
+
+```powershell
+npm run codex:auto
+```
+
+Useful options:
+
+```powershell
+node .\scripts\codex-auto-bridge.js --repo-root . --mode all --sandbox danger-full-access
+```
+
+Default behavior is conservative:
+
+- only `command` events targeting `codex` or `all`
+- only `post` events that mention `codex`
+
+This proves a supported Codex inbound trigger exists. It does not by itself mean the product should claim full-auto shipping until the end-to-end acceptance checklist is verified on a fresh setup.
 
 ---
 
@@ -213,7 +274,7 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 |---|---|
 | `AgentWatch: Open Board (Tab)` | Open the board as a full editor tab for a larger view |
 | `AgentWatch: STOP All Agents` | Post an immediate STOP command targeting all agents |
-| `AgentWatch: Show MCP Config` | Display the JSON snippet to add to an agent's MCP config |
+| `AgentWatch: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
 
 ---
 
