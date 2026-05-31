@@ -70,6 +70,24 @@ function violatesPowerShellBan(command: string, args: string[]): boolean {
     return false;
 }
 
+// Base commands that on Windows are shell builtins (mkdir) or .cmd/.bat shims
+// (npm, npx, tsc, …) and therefore can't be launched with spawn(shell:false).
+// We run *these* through cmd.exe /c so workers can scaffold/build on Windows.
+// Safety is unchanged: the shell-operator ban + denylist are still applied to
+// the full command before we ever reach this routing (see guardWorkerCommand).
+const WINDOWS_SHELL_TOOLS = new Set([
+    'mkdir', 'npm', 'npx', 'pnpm', 'yarn', 'node', 'tsc',
+    'python', 'python3', 'pip', 'pip3', 'deno', 'bun',
+    'cargo', 'go', 'dotnet', 'echo', 'where',
+]);
+
+/** True when `command` should be routed through cmd.exe /c on Windows. */
+export function needsWindowsShell(command: string): boolean {
+    const base = command.toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+    const name = base.split(/[\\/]/).pop() ?? base;
+    return WINDOWS_SHELL_TOOLS.has(name);
+}
+
 export interface GuardResult {
     ok: boolean;
     reason?: string;

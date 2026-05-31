@@ -9,7 +9,9 @@ Priority key: **P0** = correctness/DX gap found in testing · **P1** = discussed
 
 ## P0 — Found during testing
 
-### 1. Worker `run_command` can't run shell builtins / `.cmd` on Windows
+**Status: ✅ ALL DONE — implemented, typechecked, built, and smoke-tested 2026-05-31. Needs an extension reload/VSIX reinstall to run live.**
+
+### 1. ✅ Worker `run_command` can't run shell builtins / `.cmd` on Windows
 - **Surfaced:** Codex's RPS build — worker logged `run_command: spawn mkdir ENOENT` (×2).
 - **Why:** Worker exec uses `spawn(..., { shell: false })` (a deliberate security choice — keeps the shell-operator ban meaningful). But `mkdir` is a shell builtin (not a `.exe`), and npm/npx/etc. are `.cmd` shims — none are directly spawnable without a shell on Windows.
 - **Impact:** Low for file work (the worker self-recovered: `write_file` auto-creates parent dirs via `fs.mkdirSync`). Higher for any task needing a build step (`npm install`, `npm run build`) — workers currently can't run those on Windows.
@@ -19,13 +21,13 @@ Priority key: **P0** = correctness/DX gap found in testing · **P1** = discussed
   - Or simplest: document "workers prefer `write_file` (creates dirs); no build tools on Windows" and leave exec for real binaries only.
 - **Files:** `src/workerTools.ts` (`runCommandTool`), `src/workerDenyList.ts`.
 
-### 2. Draft-mode `propose_diff` is truncated on the board
+### 2. ✅ Draft-mode `propose_diff` is truncated on the board
 - **Surfaced:** review of board-post slicing while debugging worker output.
 - **Why:** Worker tool-call posts are sliced (~160 chars) and the done-post to ~180–400 to keep the feed tidy. For **clanker** mode that's fine (files are on disk for the orchestrator to read). But in **draft** mode the *only* place the proposed diff exists is the board post — so a real multi-line diff gets cut off and the orchestrator can't see/apply it.
 - **Approach:** Write the full proposed diff to `.coordination/proposals/<subagentId>.diff` and post a short reference line pointing the orchestrator at it (or attach via a `get_proposal` tool). Don't cap proposal content.
 - **Files:** `src/subagentLoop.ts` (onToolCall posting), `src/workerTools.ts` (`proposeDiffTool`).
 
-### 3. Unhelpful worker error messages
+### 3. ✅ Unhelpful worker error messages
 - **Surfaced:** worker posted `error: fetch failed` when `:8080` had no model loaded — opaque; took a port probe to realize the model server was down/mid-swap.
 - **Why:** Node's `fetch` throws a bare `fetch failed` on connection refused.
 - **Approach:** Wrap backend calls so the error includes the endpoint URL and a hint, e.g. `could not reach direct backend http://127.0.0.1:8080/v1 — is the model server running?`. Distinguish connection-refused from HTTP errors.
@@ -123,6 +125,7 @@ Priority key: **P0** = correctness/DX gap found in testing · **P1** = discussed
 ---
 
 ## Done (for reference — fixed during testing)
+- **P0 #1–3 (2026-05-31):** (#1) win32 `run_command` routes an allowlist of dev tools/builtins (mkdir, npm, npx, node, git, python, tsc, …) through `cmd.exe /d /s /c` via `needsWindowsShell()` in workerDenyList.ts — denylist + shell-operator ban still applied first; timeouts now tree-kill (`taskkill /T /F`) so a stalled npm doesn't orphan node. (#2) `propose_diff` writes the FULL diff to `.coordination/proposals/<path>-<ts>.diff` (git-ignored) and the board posts a short `→ saved to <path>` ref instead of a 160-char slice; `onToolCall` callback now passes the whole `WorkerToolResult`. (#3) `subagent.ts` shared `postChat()` + `describeFetchError()` turn bare `fetch failed` into `could not reach <backend> backend at <url> — is the model server running? (connection refused/…)`. typecheck+build clean; all three smoke-tested green.
 - **P1-UX #13–16 (2026-05-31):** multiline Post Task `<textarea>` (Enter posts, Shift+Enter newline, IME-safe); worker board labels = purple WORKER chip + per-model-tinted short model chip with full id on hover (`agentBadge`/`shortenModel`/`modelTint` in board.js); **non-destructive history** — Clear + new "New Session" button call `bridge.archiveAndReset()` (saves `.coordination/sessions/<id>.ndjson` + `index.json`, re-seeds SESSION_START if a session is active so agents stay linked), session picker loads any saved session read-only (live polling frozen via `viewingSessionId`). Types: `SessionSummary` + `sessionList`/`sessionEvents`/`newSession`/`listSessions`/`loadSession` messages. Wired in boardView.ts + boardPanel.ts (`refreshFeed`). typecheck+build clean; bridge archive/reseed/list/read smoke-tested green. Sessions dir covered by existing `.coordination/` git+vsix ignore.
 - Orphan/zombie codex bridge (Windows `shell:true` kill only reaped `cmd.exe`) → **0.2.5** tree-kill (`taskkill /T /F`) + auto-exit on app-server drop.
 - Codex missed posts made during its app-server startup window → **0.2.3** prime cursor before startup.

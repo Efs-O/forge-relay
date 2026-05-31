@@ -74,31 +74,64 @@ export interface ChatMessage {
     content: string;
 }
 
+/**
+ * Turn an opaque fetch failure into something a human can act on. Node's global
+ * fetch throws a bare `TypeError: fetch failed` on connection refused / DNS /
+ * timeout, which (during testing) cost a port probe to realise the model server
+ * was simply down or mid-swap. We surface the endpoint and a hint instead.
+ */
+function describeFetchError(err: unknown, url: string, backend: string): string {
+    const cause = (err as { cause?: { code?: string } } | undefined)?.cause;
+    const code = cause?.code;
+    const base = `could not reach ${backend} backend at ${url} — is the model server running?`;
+    const hint =
+        code === 'ECONNREFUSED' ? 'connection refused'
+        : code === 'ENOTFOUND' ? 'host not found'
+        : code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT' ? 'connection timed out'
+        : code ? code
+        : (err instanceof Error ? err.message : String(err));
+    return `${base} (${hint})`;
+}
+
+/** Shared POST to the resolved backend's /chat/completions, with clear errors. */
+async function postChat(
+    resolved: ResolvedModel,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+): Promise<unknown> {
+    const url = `${resolved.baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (resolved.apiKey) {
+        headers['Authorization'] = `Bearer ${resolved.apiKey}`;
+    }
+
+    let res: Response;
+    try {
+        res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
+    } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') { throw err; }
+        throw new Error(describeFetchError(err, url, resolved.backend));
+    }
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`${resolved.backend} backend HTTP ${res.status} at ${url}: ${text.slice(0, 300)}`);
+    }
+    return res.json();
+}
+
 /** POST an OpenAI-compatible chat completion and return the assistant text. */
 export async function chatCompletion(
     resolved: ResolvedModel,
     messages: ChatMessage[],
     opts: { temperature?: number; maxTokens?: number; signal?: AbortSignal } = {},
 ): Promise<string> {
-    const url = `${resolved.baseUrl.replace(/\/$/, '')}/chat/completions`;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (resolved.apiKey) {
-        headers['Authorization'] = `Bearer ${resolved.apiKey}`;
-    }
-    const body = JSON.stringify({
+    const data = await postChat(resolved, {
         model: resolved.model,
         messages,
         temperature: opts.temperature ?? 0.2,
         max_tokens: opts.maxTokens ?? 1024,
         stream: false,
-    });
-
-    const res = await fetch(url, { method: 'POST', headers, body, signal: opts.signal });
-    if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`${resolved.backend} backend HTTP ${res.status}: ${text.slice(0, 300)}`);
-    }
-    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    }, opts.signal) as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;
     if (typeof content !== 'string') {
         throw new Error(`${resolved.backend} backend returned no message content`);
@@ -112,22 +145,7 @@ export async function chatCompletionRaw(
     payload: Record<string, unknown>,
     signal?: AbortSignal,
 ): Promise<unknown> {
-    const url = `${resolved.baseUrl.replace(/\/$/, '')}/chat/completions`;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (resolved.apiKey) {
-        headers['Authorization'] = `Bearer ${resolved.apiKey}`;
-    }
-    const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model: resolved.model, stream: false, ...payload }),
-        signal,
-    });
-    if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`${resolved.backend} backend HTTP ${res.status}: ${text.slice(0, 300)}`);
-    }
-    return res.json();
+    return postChat(resolved, { model: resolved.model, stream: false, ...payload }, signal);
 }
 
 const TIER1_SYSTEM_PROMPT = [

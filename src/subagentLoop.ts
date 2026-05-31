@@ -4,7 +4,7 @@ import {
     chatCompletionRaw, dispatchSubagentTier1, resolveModel, ResolvedModel,
     SubagentBackends, SubagentToolMode, workerAgentName,
 } from './subagent';
-import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext } from './workerTools';
+import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 
 interface OpenAiToolCall {
     id?: string;
@@ -22,7 +22,7 @@ export interface WorkerLoopOptions {
     /** Return a non-null reason to abort the loop between steps (e.g. board STOP). */
     shouldAbort?: () => string | null;
     /** Notified after each tool call so the caller can post it to the board. */
-    onToolCall?: (name: string, result: string, mutated: boolean, touched?: string) => void;
+    onToolCall?: (name: string, res: WorkerToolResult) => void;
     signal?: AbortSignal;
 }
 
@@ -95,7 +95,7 @@ export async function runWorkerLoop(
 
             const toolResult = await executeWorkerTool(name, args, ctx);
             toolCalls++;
-            opts.onToolCall?.(name, toolResult.result, Boolean(toolResult.mutated), toolResult.touched);
+            opts.onToolCall?.(name, toolResult);
             messages.push({ role: 'tool', tool_call_id: call.id ?? name, content: toolResult.result.slice(0, 8_000) });
         }
     }
@@ -170,10 +170,14 @@ export async function handleDispatchSubagent(
                     const blocking = bridge.getBlockingCommands(worker);
                     return blocking.length ? `board STOP/PAUSE (${blocking[0].text})` : null;
                 },
-                onToolCall: (name, toolResult, mutated, touched) => {
+                onToolCall: (name, res) => {
                     // Only surface mutations / proposals on the board to avoid spam.
-                    if (mutated || name === 'propose_diff') {
-                        bridge.post(worker, `${name} ${touched ?? ''}: ${toolResult.replace(/\s+/g, ' ').slice(0, 160)}`.slice(0, 300));
+                    if (name === 'propose_diff' && res.proposalPath) {
+                        // Point the orchestrator at the saved full diff instead of a
+                        // truncated inline blob (P0 #2).
+                        bridge.post(worker, `propose_diff ${res.touched ?? ''} → full diff saved to ${res.proposalPath} (review & apply)`.slice(0, 300));
+                    } else if (res.mutated || name === 'propose_diff') {
+                        bridge.post(worker, `${name} ${res.touched ?? ''}: ${res.result.replace(/\s+/g, ' ').slice(0, 160)}`.slice(0, 300));
                     }
                 },
             });

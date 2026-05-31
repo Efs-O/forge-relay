@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { guardWorkerCommand } from './workerDenyList';
+import { guardWorkerCommand, needsWindowsShell } from './workerDenyList';
 
 export type WorkerAutonomy = 'draft' | 'clanker';
 
@@ -17,6 +17,8 @@ export interface WorkerToolResult {
     mutated?: boolean;
     /** Path the worker touched, for an advisory claim / board post. */
     touched?: string;
+    /** Repo-relative path of a saved proposal diff (draft mode), for the board ref. */
+    proposalPath?: string;
 }
 
 const MAX_READ_BYTES = 60_000;
@@ -115,12 +117,36 @@ export function unifiedDiff(oldText: string, newText: string, label: string): st
     return out.join('\n');
 }
 
+const MAX_DIFF_INLINE = 1_500;
+
 function proposeDiffTool(repoRoot: string, args: Record<string, unknown>): WorkerToolResult {
     const full = resolveInRepo(repoRoot, String(args.path ?? ''));
+    const relPath = rel(repoRoot, full);
     const newContent = String(args.content ?? '');
     const oldContent = fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : '';
-    const diff = unifiedDiff(oldContent, newContent, rel(repoRoot, full));
-    return { result: `PROPOSED DIFF (not applied):\n${diff}`, touched: rel(repoRoot, full) };
+    const diff = unifiedDiff(oldContent, newContent, relPath);
+
+    // Persist the FULL diff to disk. In draft mode the board post is the only
+    // place a proposal would otherwise live, and board posts are sliced (~160
+    // chars), so a multi-line diff would be lost. Saving it lets the orchestrator
+    // read and apply the complete proposal. (.coordination/ is git-ignored.)
+    const proposalsDir = path.join(repoRoot, '.coordination', 'proposals');
+    let proposalRel: string | undefined;
+    try {
+        fs.mkdirSync(proposalsDir, { recursive: true });
+        const safe = relPath.replace(/[\\/]/g, '__').replace(/[^A-Za-z0-9_.-]/g, '_');
+        const proposalFull = path.join(proposalsDir, `${safe}-${Date.now().toString(36)}.diff`);
+        fs.writeFileSync(proposalFull, diff + '\n', 'utf8');
+        proposalRel = rel(repoRoot, proposalFull);
+    } catch { /* fall back to inline-only if the proposals dir can't be written */ }
+
+    const preview = diff.length > MAX_DIFF_INLINE ? diff.slice(0, MAX_DIFF_INLINE) + '\n…[truncated — see saved diff]' : diff;
+    const ref = proposalRel ? `\nFull diff saved to ${proposalRel} for the orchestrator to review/apply.` : '';
+    return {
+        result: `PROPOSED DIFF for ${relPath} (NOT applied).${ref}\n${preview}`,
+        touched: relPath,
+        proposalPath: proposalRel,
+    };
 }
 
 // ── Mutating tools (clanker autonomy only) ───────────────────────────────────
@@ -145,6 +171,18 @@ function replaceInFileTool(repoRoot: string, args: Record<string, unknown>): Wor
     return { result: `REPLACED in ${rel(repoRoot, full)} (${before.length}→${after.length} bytes)`, mutated: true, touched: rel(repoRoot, full) };
 }
 
+/** Kill a worker child and its descendants (cmd.exe → npm → node can orphan on win32). */
+function killTree(pid: number | undefined): void {
+    if (pid === undefined) { return; }
+    try {
+        if (process.platform === 'win32') {
+            spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => { /* ignore */ });
+        } else {
+            process.kill(pid, 'SIGKILL');
+        }
+    } catch { /* ignore */ }
+}
+
 function runCommandTool(repoRoot: string, args: Record<string, unknown>): Promise<WorkerToolResult> {
     const command = String(args.command ?? '');
     const cmdArgs = Array.isArray(args.args) ? args.args.map(String) : [];
@@ -156,16 +194,27 @@ function runCommandTool(repoRoot: string, args: Record<string, unknown>): Promis
         return Promise.resolve({ result: `REFUSED: ${guard.reason}` });
     }
 
+    // Windows: shell builtins (mkdir) and .cmd shims (npm/npx/tsc/…) can't be
+    // launched with shell:false. Route the allowlisted set through cmd.exe /c.
+    // The denylist + shell-operator ban were already enforced above, so cmd
+    // only ever sees an operator-free, non-destructive command line.
+    let program = command;
+    let spawnArgs = cmdArgs;
+    if (process.platform === 'win32' && needsWindowsShell(command)) {
+        program = process.env.ComSpec || 'cmd.exe';
+        spawnArgs = ['/d', '/s', '/c', command, ...cmdArgs];
+    }
+
     return new Promise((resolve) => {
         let stdout = '', stderr = '', done = false;
         let child;
         try {
-            child = spawn(command, cmdArgs, { cwd, shell: false });
+            child = spawn(program, spawnArgs, { cwd, shell: false });
         } catch (err) {
             resolve({ result: `spawn error: ${err instanceof Error ? err.message : String(err)}` });
             return;
         }
-        const timer = setTimeout(() => { done = true; try { child.kill(); } catch { /* ignore */ } }, timeoutMs);
+        const timer = setTimeout(() => { done = true; killTree(child.pid); }, timeoutMs);
         child.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
         child.stderr?.on('data', (c: Buffer) => { stderr += c.toString(); });
         child.on('error', (err) => {
@@ -202,7 +251,7 @@ export function workerToolSchemas(autonomy: WorkerAutonomy): unknown[] {
         tools.push(
             fn('write_file', 'Create or overwrite a repo file with new content.', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
             fn('replace_in_file', 'Replace occurrences of a search string in a repo file.', { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } }, ['path', 'search', 'replace']),
-            fn('run_command', 'Run a binary directly (no shell). Destructive commands are refused.', { command: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, cwd: { type: 'string' }, timeout_ms: { type: 'integer' } }, ['command', 'args']),
+            fn('run_command', 'Run a command (no shell operators — pass args as the args array, not one string). Common dev tools work cross-platform: mkdir, npm, npx, node, git, python, tsc, etc. Destructive commands are refused.', { command: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, cwd: { type: 'string' }, timeout_ms: { type: 'integer' } }, ['command', 'args']),
         );
     } else {
         // Draft mode: no direct writes — the worker proposes a diff instead.
