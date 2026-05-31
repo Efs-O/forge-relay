@@ -23,6 +23,8 @@ export interface WorkerLoopOptions {
     shouldAbort?: () => string | null;
     /** Notified after each tool call so the caller can post it to the board. */
     onToolCall?: (name: string, res: WorkerToolResult) => void;
+    /** Notified after each model turn with token usage (when the backend reports it). */
+    onUsage?: (promptTokens: number, totalTokens: number) => void;
     signal?: AbortSignal;
 }
 
@@ -31,6 +33,10 @@ export interface WorkerLoopResult {
     steps: number;
     toolCalls: number;
     aborted?: string;
+    /** Input/context tokens of the last model turn (how full the window got). */
+    promptTokens?: number;
+    /** Cumulative tokens across all model turns this dispatch. */
+    totalTokens?: number;
 }
 
 const MAX_STEPS_DEFAULT = 12;
@@ -68,22 +74,34 @@ export async function runWorkerLoop(
     ];
 
     let toolCalls = 0;
+    let promptTokens = 0;
+    let totalTokens = 0;
     for (let step = 0; step < maxSteps; step++) {
         const abort = opts.shouldAbort?.();
         if (abort) {
-            return { finalText: `Aborted: ${abort}`, steps: step, toolCalls, aborted: abort };
+            return { finalText: `Aborted: ${abort}`, steps: step, toolCalls, aborted: abort, promptTokens, totalTokens };
         }
 
         const res = await chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal) as
-            { choices?: Array<{ message?: OpenAiMessage }> };
+            { choices?: Array<{ message?: OpenAiMessage }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
+
+        // Track context/token usage when the backend reports it (llama.cpp, Ollama
+        // and the bridge all include an OpenAI `usage` block).
+        const usage = res.usage;
+        if (usage) {
+            if (typeof usage.prompt_tokens === 'number') { promptTokens = usage.prompt_tokens; }
+            if (typeof usage.total_tokens === 'number') { totalTokens += usage.total_tokens; }
+            opts.onUsage?.(promptTokens, totalTokens);
+        }
+
         const msg = res.choices?.[0]?.message;
         if (!msg) {
-            return { finalText: 'Worker returned no message.', steps: step + 1, toolCalls };
+            return { finalText: 'Worker returned no message.', steps: step + 1, toolCalls, promptTokens, totalTokens };
         }
 
         const calls = msg.tool_calls ?? [];
         if (calls.length === 0) {
-            return { finalText: (msg.content ?? '').trim() || '(worker finished with no summary)', steps: step + 1, toolCalls };
+            return { finalText: (msg.content ?? '').trim() || '(worker finished with no summary)', steps: step + 1, toolCalls, promptTokens, totalTokens };
         }
 
         // Echo the assistant tool-call message, then append each tool result.
@@ -100,7 +118,24 @@ export async function runWorkerLoop(
         }
     }
 
-    return { finalText: `Reached step limit (${maxSteps}) without finishing.`, steps: maxSteps, toolCalls };
+    return { finalText: `Reached step limit (${maxSteps}) without finishing.`, steps: maxSteps, toolCalls, promptTokens, totalTokens };
+}
+
+/** Compact token count for board posts: 12345 → "12k", 800 → "800". */
+function ktok(n: number): string {
+    return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
+/** Heuristic soft ceiling for warning that context is filling up (local models
+ * commonly run 4k–32k windows; we don't get num_ctx over the API). */
+const SOFT_CTX_WARN = 24_000;
+
+/** ", ctx ~12k, ~30k tok" suffix for board/result lines, when usage was reported. */
+function usageSuffix(r: WorkerLoopResult): string {
+    const parts: string[] = [];
+    if (r.promptTokens) { parts.push(`ctx ~${ktok(r.promptTokens)}`); }
+    if (r.totalTokens) { parts.push(`~${ktok(r.totalTokens)} tok`); }
+    return parts.length ? `, ${parts.join(', ')}` : '';
 }
 
 /** Record a git checkpoint so a clanker worker's changes are revertible. */
@@ -178,11 +213,20 @@ export async function handleDispatchSubagent(
         // ownership shows in Active Claims and two workers won't draft the same
         // file. Released when the worker finishes (even on error/abort).
         const claimed = new Set<string>();
+        let warnedCtx = false;
         try {
             const result = await runWorkerLoop(resolved, ctx, task, context, {
                 shouldAbort: () => {
                     const blocking = bridge.getBlockingCommands(worker);
                     return blocking.length ? `board STOP/PAUSE (${blocking[0].text})` : null;
+                },
+                onUsage: (prompt) => {
+                    // #4: surface context pressure once, so a long worker run that's
+                    // filling its window is visible before it errors/degrades.
+                    if (!warnedCtx && prompt >= SOFT_CTX_WARN) {
+                        warnedCtx = true;
+                        bridge.post(worker, `⚠ ctx ~${ktok(prompt)} tokens — context is filling up; consider a tighter task or splitting the work.`);
+                    }
                 },
                 onToolCall: (name, res) => {
                     // Only surface mutations / proposals on the board to avoid spam.
@@ -199,7 +243,7 @@ export async function handleDispatchSubagent(
                     }
                 },
             });
-            bridge.post(worker, `${wake}done [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools): ${result.finalText.replace(/\s+/g, ' ').slice(0, 180)}`.slice(0, 400));
+            bridge.post(worker, `${wake}done [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools${usageSuffix(result)}): ${result.finalText.replace(/\s+/g, ' ').slice(0, 180)}`.slice(0, 400));
             return result;
         } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
@@ -224,7 +268,7 @@ export async function handleDispatchSubagent(
         const result = await runWork(false);
         const head = result.aborted
             ? `SUBAGENT ${subagentId} (${model}) ABORTED: ${result.aborted}`
-            : `SUBAGENT ${subagentId} (${model}, ${autonomy}) COMPLETED (${result.steps} steps, ${result.toolCalls} tool calls):`;
+            : `SUBAGENT ${subagentId} (${model}, ${autonomy}) COMPLETED (${result.steps} steps, ${result.toolCalls} tool calls${usageSuffix(result)}):`;
         return `${head}\n\n${result.finalText}\n\n[${checkpoint}]`;
     } catch (err) {
         return `SUBAGENT ${subagentId} (${model}) ERROR: ${err instanceof Error ? err.message : String(err)}`;
