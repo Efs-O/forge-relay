@@ -37,6 +37,7 @@ export function activate(context: vscode.ExtensionContext): void {
         directUrl: config.get<string>('subagentDirectUrl', 'http://127.0.0.1:8080/v1').trim(),
         bridgeApiKey: config.get<string>('subagentBridgeApiKey', '').trim() || undefined,
         defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'bridge'),
+        forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
     });
 
     try {

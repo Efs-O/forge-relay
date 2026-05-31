@@ -3,6 +3,7 @@ import { Bridge } from './bridge';
 import {
     chatCompletionRaw, dispatchSubagentTier1, resolveModel, ResolvedModel,
     SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote,
+    forgeRoute, forgeEnsure, forgeRelease, forgeHealthz,
 } from './subagent';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 
@@ -175,28 +176,77 @@ export async function handleDispatchSubagent(
     const context = args.context !== undefined ? String(args.context) : undefined;
     const mode = String(args.mode ?? 'sync') === 'async' ? 'async' : 'sync';
 
-    // #7: validate the backend is reachable before we post "dispatched" or burn a
-    // turn. Fail fast with a clear message if the model server is down; otherwise
-    // carry a routing note (e.g. direct ignores the model id, or the id isn't
-    // served) so the orchestrator knows what actually ran.
-    const resolved = resolveModel(model, backends);
-    const probe = await validateBackend(resolved);
-    if (!probe.reachable) {
-        return `SUBAGENT not dispatched (${model}) — ${probe.message}`;
+    const worker = workerAgentName(model);
+
+    // Resolve the worker endpoint and a teardown hook. The Forge route (opt-in,
+    // forgeControlUrl set or a "forge:" prefix) asks Forge to load the model and
+    // wait until it is healthy, then dispatches to the endpoint Forge returns —
+    // every successful /ensure is paired with a /release in `release()`. When the
+    // Forge route is off, this is exactly the previous direct/ollama/bridge probe.
+    const route = forgeRoute(model, backends);
+    let resolved: ResolvedModel;
+    let modelNote = '';
+    let release: () => Promise<void> = async () => { /* no-op when not routing via Forge */ };
+
+    if (route.viaForge && !backends.forgeControlUrl) {
+        // A "forge:" prefix was used but no control URL is configured.
+        return `SUBAGENT not dispatched (${model}) — "forge:" routing requested but no forgeControlUrl is configured (set agentwatch.subagentForgeControlUrl / AGENTWATCH_FORGE_CONTROL_URL).`;
     }
-    const modelNote = modelRoutingNote(resolved, probe.models);
+    if (route.viaForge) {
+        const controlUrl = backends.forgeControlUrl!;
+        if (!(await forgeHealthz(controlUrl))) {
+            const msg = `Forge control API not reachable at ${controlUrl} — is Forge running with control_server.enabled?`;
+            bridge.post(worker, `not dispatched (${model}): ${msg}`.slice(0, 300));
+            return `SUBAGENT not dispatched (${model}) — ${msg}`;
+        }
+        try {
+            const ensured = await forgeEnsure(controlUrl, route.model);
+            // Show the real backend Forge loaded the model on (llamacpp/ollama/…),
+            // with a "via Forge" marker so the routing is still visible on the board.
+            resolved = { backend: ensured.backend, model: ensured.model, baseUrl: ensured.baseUrl };
+            modelNote = ' (via Forge)';
+        } catch (err) {
+            // 404 unknown / 409 busy / 502 load error all arrive as clear messages.
+            const msg = err instanceof Error ? err.message : String(err);
+            bridge.post(worker, `not dispatched (${model}): ${msg}`.slice(0, 300));
+            return `SUBAGENT not dispatched (${model}) — ${msg}`;
+        }
+        let released = false;
+        release = async () => {
+            if (released) { return; }
+            released = true;
+            const ok = await forgeRelease(controlUrl, route.model);
+            if (!ok) {
+                bridge.post(worker, `⚠ Forge /release for ${route.model} not confirmed — its load may stay held`);
+            }
+        };
+    } else {
+        // #7: validate the backend is reachable before we post "dispatched" or burn
+        // a turn. Fail fast with a clear message if the model server is down;
+        // otherwise carry a routing note (e.g. direct ignores the model id, or the
+        // id isn't served) so the orchestrator knows what actually ran.
+        resolved = resolveModel(model, backends);
+        const probe = await validateBackend(resolved);
+        if (!probe.reachable) {
+            return `SUBAGENT not dispatched (${model}) — ${probe.message}`;
+        }
+        modelNote = modelRoutingNote(resolved, probe.models);
+    }
 
     // Tier 1 — reasoning-only completion.
     if (requestedTools === 'none') {
-        const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context });
-        return r.status === 'completed'
-            ? `SUBAGENT ${r.subagentId} (${model})${modelNote} COMPLETED:\n\n${r.result}`
-            : `SUBAGENT ${r.subagentId} (${model}) ERROR: ${r.error}`;
+        try {
+            const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context }, resolved);
+            return r.status === 'completed'
+                ? `SUBAGENT ${r.subagentId} (${model})${modelNote} COMPLETED:\n\n${r.result}`
+                : `SUBAGENT ${r.subagentId} (${model}) ERROR: ${r.error}`;
+        } finally {
+            await release();
+        }
     }
 
     // Tier 2 — agentic worker loop.
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const worker = workerAgentName(model);
     const autonomy: WorkerAutonomy = requestedTools === 'readonly' ? 'draft' : bridge.getAutonomyMode();
     const ctx: WorkerToolContext = { repoRoot: bridge.getRepoRoot(), autonomy };
 
@@ -253,6 +303,10 @@ export async function handleDispatchSubagent(
             for (const p of claimed) {
                 try { bridge.release(worker, [p], `worker ${subagentId.slice(0, 10)} done`); } catch { /* ignore */ }
             }
+            // Forge ref-count discipline: release the model hold whether the worker
+            // finished, errored, or aborted. Runs once for both sync and async, since
+            // runWork wraps the entire worker run in either mode (no-op off the route).
+            await release();
         }
     };
 

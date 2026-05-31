@@ -27,6 +27,7 @@ const subagentBackends: SubagentBackends = {
     directUrl: process.env.AGENTWATCH_DIRECT_URL || DEFAULT_SUBAGENT_BACKENDS.directUrl,
     bridgeApiKey: process.env.AGENTWATCH_BRIDGE_API_KEY || undefined,
     defaultBackend: (process.env.AGENTWATCH_DEFAULT_BACKEND as SubagentBackends['defaultBackend']) || DEFAULT_SUBAGENT_BACKENDS.defaultBackend,
+    forgeControlUrl: process.env.AGENTWATCH_FORGE_CONTROL_URL || undefined,
 };
 
 const server = new Server(

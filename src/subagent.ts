@@ -16,6 +16,14 @@ export interface SubagentBackends {
     directUrl: string;   // e.g. http://127.0.0.1:8080/v1
     bridgeApiKey?: string;
     defaultBackend: 'bridge' | 'ollama' | 'direct';
+    /**
+     * Forge model-control API base, e.g. `http://127.0.0.1:8799`. Opt-in: when
+     * set, dispatch routes through Forge — it loads the requested model on
+     * demand, waits until it is healthy, and hands back its endpoint (killing
+     * the `fetch failed` / wrong-model failures of the blind direct route). Unset
+     * (default) keeps the existing bridge/ollama/direct routing untouched.
+     */
+    forgeControlUrl?: string;
 }
 
 export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
@@ -40,7 +48,12 @@ export interface DispatchOptions {
 }
 
 export interface ResolvedModel {
-    backend: 'bridge' | 'ollama' | 'direct';
+    /**
+     * Routing/display label. The direct routes use the known literals; the Forge
+     * route carries the *real* backend Forge reports for the loaded model (e.g.
+     * `llamacpp`, `ollama`), so the board shows what actually served the request.
+     */
+    backend: 'bridge' | 'ollama' | 'direct' | (string & {});
     model: string;
     baseUrl: string;
     apiKey?: string;
@@ -67,6 +80,27 @@ export function resolveModel(model: string, backends: SubagentBackends): Resolve
         baseUrl,
         apiKey: backend === 'bridge' ? backends.bridgeApiKey : undefined,
     };
+}
+
+/**
+ * Decide whether a dispatch should route through Forge's control API, and return
+ * the bare Forge model name to pass to `/ensure` (the `forge:` prefix stripped).
+ * Rules: an explicit `forge:` prefix always routes via Forge; an explicit
+ * `bridge:`/`ollama:`/`direct:` prefix always keeps its existing direct routing
+ * (so the Forge route never overrides a deliberate backend choice); anything else
+ * (unprefixed, or an unknown prefix) routes via Forge only when `forgeControlUrl`
+ * is set. When it is unset, this always returns `viaForge: false`.
+ */
+export function forgeRoute(model: string, backends: SubagentBackends): { viaForge: boolean; model: string } {
+    const sep = model.indexOf(':');
+    if (sep !== -1) {
+        const prefix = model.slice(0, sep).toLowerCase();
+        if (prefix === 'forge') { return { viaForge: true, model: model.slice(sep + 1) }; }
+        if (prefix === 'bridge' || prefix === 'ollama' || prefix === 'direct') {
+            return { viaForge: false, model };
+        }
+    }
+    return { viaForge: Boolean(backends.forgeControlUrl), model };
 }
 
 export interface ChatMessage {
@@ -174,20 +208,28 @@ async function fetchModels(baseUrl: string, backend: string, apiKey?: string): P
 }
 
 export interface BackendModels {
-    backend: 'bridge' | 'ollama' | 'direct';
+    backend: 'bridge' | 'ollama' | 'direct' | 'forge';
     baseUrl: string;
     ok: boolean;
     models?: string[];
     error?: string;
 }
 
-/** Probe all three backends' /models in parallel for the list_models tool. */
+/**
+ * Probe the backends' /models in parallel for the list_models tool. When
+ * `forgeControlUrl` is set it is added (and listed first) as the preferred source
+ * of truth for worker model names — Forge's `GET /models` shares the
+ * `{ models: [{ name }] }` shape that {@link fetchModels} already understands.
+ */
 export async function listModels(backends: SubagentBackends): Promise<BackendModels[]> {
     const targets: Array<{ backend: BackendModels['backend']; baseUrl: string; apiKey?: string }> = [
         { backend: 'bridge', baseUrl: backends.bridgeUrl, apiKey: backends.bridgeApiKey },
         { backend: 'ollama', baseUrl: backends.ollamaUrl },
         { backend: 'direct', baseUrl: backends.directUrl },
     ];
+    if (backends.forgeControlUrl) {
+        targets.unshift({ backend: 'forge', baseUrl: backends.forgeControlUrl });
+    }
     return Promise.all(targets.map(async (t): Promise<BackendModels> => {
         try {
             return { backend: t.backend, baseUrl: t.baseUrl, ok: true, models: await fetchModels(t.baseUrl, t.backend, t.apiKey) };
@@ -223,6 +265,102 @@ export function modelRoutingNote(resolved: ResolvedModel, served?: string[]): st
     return '';
 }
 
+// ── Forge model-control client (opt-in route; see docs/forge-control-client.md) ──
+
+/** `/ensure` waits until the model is healthy, so it can block while a load runs. */
+const FORGE_ENSURE_TIMEOUT_MS = 180_000;
+
+export interface ForgeEnsureResult {
+    /** OpenAI-compatible base that already ends in `/v1`; dispatch to `${baseUrl}/chat/completions`. */
+    baseUrl: string;
+    model: string;
+    backend: string;
+}
+
+/** Carries the HTTP status from a failed `/ensure` so callers can map 404/409/502. */
+export class ForgeEnsureError extends Error {
+    constructor(public readonly status: number, message: string) {
+        super(message);
+        this.name = 'ForgeEnsureError';
+    }
+}
+
+function forgeEnsureMessage(status: number, model: string, text: string): string {
+    const detail = text ? `: ${text.slice(0, 200)}` : '';
+    switch (status) {
+        case 404: return `unknown model "${model}" (not in Forge config)`;
+        case 409: return `worker model busy — Forge capacity is full and all loaded models are in use; retry later`;
+        case 502: return `worker model "${model}" failed to load${detail}`;
+        default: return `Forge /ensure HTTP ${status}${detail}`;
+    }
+}
+
+/**
+ * POST `{controlUrl}/ensure { model }` — Forge loads/hot-swaps to the model,
+ * waits until it is healthy, and returns the endpoint to dispatch to. Throws a
+ * {@link ForgeEnsureError} (carrying the HTTP status) on a non-200 so the caller
+ * can post a clear board message. Every successful ensure MUST be paired with a
+ * {@link forgeRelease}.
+ */
+export async function forgeEnsure(controlUrl: string, model: string): Promise<ForgeEnsureResult> {
+    const url = `${controlUrl.replace(/\/$/, '')}/ensure`;
+    let res: Response;
+    try {
+        res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+            signal: AbortSignal.timeout(FORGE_ENSURE_TIMEOUT_MS),
+        });
+    } catch (err) {
+        throw new ForgeEnsureError(0, describeFetchError(err, url, 'forge'));
+    }
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new ForgeEnsureError(res.status, forgeEnsureMessage(res.status, model, text));
+    }
+    const data = await res.json().catch(() => ({})) as Partial<ForgeEnsureResult>;
+    if (!data.baseUrl) {
+        throw new ForgeEnsureError(502, `Forge /ensure returned no baseUrl for "${model}"`);
+    }
+    return { baseUrl: data.baseUrl, model: data.model ?? model, backend: data.backend ?? 'forge' };
+}
+
+/**
+ * POST `{controlUrl}/release { model }` — decrement Forge's hold count for the
+ * model. Best-effort and never throws (so it is safe in a `finally`); returns
+ * whether Forge confirmed the release.
+ */
+export async function forgeRelease(controlUrl: string, model: string): Promise<boolean> {
+    const url = `${controlUrl.replace(/\/$/, '')}/release`;
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        });
+        if (!res.ok) { return false; }
+        const data = await res.json().catch(() => ({})) as { released?: boolean };
+        return data.released === true;
+    } catch {
+        return false;
+    }
+}
+
+/** GET `{controlUrl}/healthz` → true when Forge's control API is up. Never throws. */
+export async function forgeHealthz(controlUrl: string): Promise<boolean> {
+    const url = `${controlUrl.replace(/\/$/, '')}/healthz`;
+    try {
+        const res = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+        if (!res.ok) { return false; }
+        const data = await res.json().catch(() => ({})) as { ok?: boolean };
+        return data.ok === true;
+    } catch {
+        return false;
+    }
+}
+
 /** Human-readable model menu for the list_models tool. */
 export async function handleListModels(backends: SubagentBackends): Promise<string> {
     const results = await listModels(backends);
@@ -233,7 +371,10 @@ export async function handleListModels(backends: SubagentBackends): Promise<stri
             : '  (reachable, but no models reported)';
         return `${r.backend} @ ${r.baseUrl} — UP:\n${list}`;
     });
-    return `AVAILABLE WORKER MODELS — pass to dispatch_subagent as "<backend>:<model>":\n\n${blocks.join('\n\n')}`;
+    const forgeNote = backends.forgeControlUrl
+        ? `\n\nForge route is ON (${backends.forgeControlUrl}): unprefixed or "forge:<model>" ids load on demand via Forge and dispatch only once the model is warm.`
+        : '';
+    return `AVAILABLE WORKER MODELS — pass to dispatch_subagent as "<backend>:<model>":\n\n${blocks.join('\n\n')}${forgeNote}`;
 }
 
 export const LIST_MODELS_TOOL = {
@@ -276,10 +417,11 @@ export async function dispatchSubagentTier1(
     bridge: Bridge,
     backends: SubagentBackends,
     opts: DispatchOptions,
+    resolvedOverride?: ResolvedModel,
 ): Promise<DispatchResult> {
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const worker = workerAgentName(opts.model);
-    const resolved = resolveModel(opts.model, backends);
+    const resolved = resolvedOverride ?? resolveModel(opts.model, backends);
 
     bridge.post(worker, `started [${subagentId.slice(0, 10)}] (${resolved.backend}:${resolved.model}): ${opts.task}`.slice(0, 300));
 
@@ -310,7 +452,8 @@ export const DISPATCH_SUBAGENT_TOOL = {
     description:
         'Delegate a self-contained task to a local model worker (Forge/Ollama/llama.cpp), like a Task subagent. '
         + 'Returns the worker result and posts its lifecycle to the AgentWatch board as worker:<model>. '
-        + 'model may be backend-prefixed: "ollama:qwen2.5-coder", "bridge:gemma", "direct:foo" (use list_models to discover what is available). '
+        + 'model may be backend-prefixed: "ollama:qwen2.5-coder", "bridge:gemma", "direct:foo", or "forge:<model>" (use list_models to discover what is available). '
+        + 'When the Forge route is enabled, unprefixed (or "forge:") ids are loaded on demand by Forge and dispatched only once the model is warm. '
         + 'tools: "none" = reasoning-only single completion; "readonly" = read/search + propose_diff (no writes); "full" = read/write/edit/run, bounded by the destructive-command denylist and the board autonomy mode.',
     inputSchema: {
         type: 'object',
