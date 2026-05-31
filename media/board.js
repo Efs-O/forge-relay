@@ -143,15 +143,19 @@ function renderAgentCard(agent, presence, session) {
     const dot = /** @type {HTMLElement} */ (document.getElementById(`status-dot-${agent}`));
     const text = /** @type {HTMLElement} */ (document.getElementById(`status-text-${agent}`));
     const detail = /** @type {HTMLElement} */ (document.getElementById(`status-detail-${agent}`));
+    const card = /** @type {HTMLElement | null} */ (document.querySelector(`.status-card[data-agent="${agent}"]`));
 
-    // P3: an orchestrator not selected in the active session's roster is shown as
-    // inactive (greyed), regardless of any stale board presence.
+    // P3 / #12: an orchestrator not selected in the active session's roster is
+    // greyed but kept visible — the whole card dims so it's clearly out of this
+    // session, without hiding it.
     if (currentRoster && session?.is_session_active && !currentRoster[agent]) {
+        card?.classList.add('card-inactive');
         dot.className = 'status-dot status-inactive';
         text.textContent = 'Inactive';
         detail.textContent = 'Not selected for this session.';
         return;
     }
+    card?.classList.remove('card-inactive');
 
     const status = presence?.status ?? 'stopped';
 

@@ -2,7 +2,56 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+
+// #9: find PIDs LISTENING on a TCP port (so we can reap a stale codex app-server
+// that an abrupt extension-host crash left holding our ws port — the clean-stop
+// tree-kill in ScriptRuntimeBridge only runs on a graceful stop).
+function findListenerPids(port) {
+    const pids = new Set();
+    try {
+        if (process.platform === 'win32') {
+            const out = spawnSync('netstat', ['-ano'], { encoding: 'utf8' }).stdout || '';
+            for (const line of out.split('\n')) {
+                if (!/LISTENING/i.test(line)) { continue; }
+                const m = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i);
+                if (m && Number(m[1]) === port) { pids.add(Number(m[2])); }
+            }
+        } else {
+            const out = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout || '';
+            for (const tok of out.split(/\s+/)) {
+                if (tok.trim()) { pids.add(Number(tok.trim())); }
+            }
+        }
+    } catch {
+        // best effort — if the probe tool isn't available we just skip reaping
+    }
+    return [...pids].filter((p) => Number.isInteger(p) && p > 0 && p !== process.pid);
+}
+
+function killPid(pid) {
+    try {
+        if (process.platform === 'win32') {
+            spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+        } else {
+            process.kill(pid, 'SIGKILL');
+        }
+    } catch {
+        // ignore — the holder may have already exited
+    }
+}
+
+// Kill any stale process still LISTENING on our ws port before we spawn a fresh
+// app-server, so a crash-orphaned codex can't make the new bridge bind-fail or
+// attach to a degraded server.
+function reapStalePort(port) {
+    const pids = findListenerPids(port);
+    for (const pid of pids) {
+        process.stderr.write(`[agentwatch] reaping stale process ${pid} holding ws port ${port}\n`);
+        killPid(pid);
+    }
+    return pids.length;
+}
 
 // Windows-safe CLI launcher. `codex`/`claude` are installed as .cmd shims, which
 // Node's spawn cannot execute directly with shell:false. On win32 we go through
@@ -289,6 +338,11 @@ class CodexBridge {
 
     async #startServer() {
         const { host, port } = this.options;
+        // #9: reap a crash-orphaned app-server still holding our port, then give
+        // the OS a moment to release it before we bind a fresh one.
+        if (reapStalePort(port) > 0) {
+            await sleep(500);
+        }
         process.stdout.write(`starting codex app-server on ws://${host}:${port}\n`);
         this.server = spawnCli('codex', ['app-server', '--listen', `ws://${host}:${port}`], {
             cwd: this.options.repoRoot,

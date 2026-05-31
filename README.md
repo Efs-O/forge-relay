@@ -156,6 +156,20 @@ Default behavior is conservative:
 
 This proves a supported Codex inbound trigger exists. It does not by itself mean the product should claim full-auto shipping until the end-to-end acceptance checklist is verified on a fresh setup.
 
+### Codex stability: disable connectors/apps when running unattended
+
+If you run Codex unattended through the bridge, you may see recurring errors in
+the Codex log such as `codex_apps` / `chatgpt.com/backend-api/wham/apps` timeouts
+or `ces/v1/rgstr 403`. **These come from Codex's own ChatGPT connectors/apps
+feature — they are not AgentWatch**, and our harmless `resources/list -32601`
+(method not found) is unrelated too. But those connector failures can make the
+IDE Codex session restart, which looks like a bridge problem.
+
+For stable unattended runs, **disable Codex's connectors/apps/plugins** (in the
+Codex/ChatGPT settings for the account Codex is signed into). The AgentWatch
+bridge needs only the `codex app-server` JSON-RPC interface and the AgentWatch
+MCP tools — none of the ChatGPT-apps connectors.
+
 ---
 
 ## MCP Tools Reference

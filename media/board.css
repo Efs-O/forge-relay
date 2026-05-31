@@ -167,6 +167,12 @@ body {
     box-shadow: 0 0 0 5px color-mix(in srgb, var(--vscode-disabledForeground) 12%, transparent);
 }
 
+/* #12: greyed-but-visible card for an orchestrator not in the active roster. */
+.status-card.card-inactive {
+    opacity: 0.5;
+    filter: grayscale(0.6);
+}
+
 .autonomy-pill {
     font: inherit;
     font-size: 0.74rem;

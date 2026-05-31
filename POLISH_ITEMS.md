@@ -108,25 +108,28 @@ Priority key: **P0** = correctness/DX gap found in testing · **P1** = discussed
 
 ## P2 — Nice-to-have / external
 
+**Status: #9, #11, #12 ✅ DONE 2026-05-31. #8 and #10 deferred (low-value: weak-model fallback — current models tool-call fine; configurable post cap — cosmetic).**
+
 ### 8. Tool-call fallback for weak local models
 - If a model returns code in a text blob instead of `tool_calls`, the worker "finishes" without writing. (Gemma & Qwen tool-called fine, so low priority.) Could parse fenced code blocks + file headers and offer to write.
 
-### 9. Bridge: reap a stale app-server on our port at startup
+### 9. ✅ Bridge: reap a stale app-server on our port at startup
 - Belt-and-suspenders beyond the 0.2.5 tree-kill: if the extension host crashes abruptly, `taskkill` on stop never runs and an orphan could remain. On bridge start, if our ws port is already held, kill the holder (or pick a free port) before spawning.
 - **Files:** `scripts/codex-auto-bridge.js`, `src/runtimeBridge.ts`.
 
 ### 10. Configurable board-post length cap
 - The done/tool-call slicing is hardcoded. Expose a setting for users who want fuller summaries on the board (ties into #2).
 
-### 11. Document: disable Codex's connectors/apps for IDE stability
+### 11. ✅ Document: disable Codex's connectors/apps for IDE stability
 - The recurring `codex_apps` / `chatgpt.com/backend-api/wham/apps` timeouts and `ces/v1/rgstr 403` are Codex's own ChatGPT-apps feature failing — unrelated to AgentWatch, but they can make the IDE Codex restart. Add a setup note recommending users disable Codex connectors/apps/plugins when running unattended.
 
-### 12. P3 UI polish — unselected-agent greying
+### 12. ✅ P3 UI polish — unselected-agent greying (decided: grey but keep visible)
 - Decide whether `SESSION_START` roster should auto-grey the unselected orchestrator's last-known activity or hide it (left open in the plan §5).
 
 ---
 
 ## Done (for reference — fixed during testing)
+- **P2 #9/#11/#12 (2026-05-31):** (#9) codex-auto-bridge.js reaps a crash-orphaned app-server still LISTENING on our ws port before spawning a fresh one — `findListenerPids` (win32 `netstat -ano` parse / unix `lsof -ti`, excludes own pid), `killPid` (taskkill /T /F or SIGKILL), called at top of `#startServer` + 500ms settle; netstat parse validated on win32. (#11) README "Codex stability" note — the codex_apps/wham timeouts + ces 403 are Codex's own connectors, not AgentWatch; recommend disabling Codex connectors/apps for unattended runs. (#12) decided **grey-but-keep-visible**: renderAgentCard toggles `.card-inactive` on the whole `.status-card` (opacity 0.5 + grayscale) for an orchestrator not in the active roster. typecheck+build clean. **#8 (weak-model tool-call fallback) and #10 (configurable post cap) intentionally deferred — low value.**
 - **P1 #4 (2026-05-31):** worker loop captures the OpenAI `usage` block each turn (subagentLoop.ts) — tracks latest `prompt_tokens` (context fullness) + cumulative `total_tokens`; `runWorkerLoop` exposes `onUsage` + returns `promptTokens`/`totalTokens`. The board done post + sync return now carry a `ctx ~Nk, ~Mk tok` suffix (`usageSuffix`/`ktok`), and a one-time `⚠ ctx ~Nk` warning posts when prompt tokens cross a heuristic soft ceiling (`SOFT_CTX_WARN` = 24k; num_ctx isn't exposed over the API). Auto-summarize/compaction deferred. Smoke-tested green.
 - **P1 #5/#6/#7 (2026-05-31):** (#5) new `list_models` MCP tool — `subagent.ts` `fetchModels()`/`listModels()`/`handleListModels()` GET each backend's `/v1/models` (4s AbortSignal.timeout) and return a backend-prefixed menu, reporting DOWN backends; registered in mcpServer.ts + mcpStdio.ts + claude-auto-bridge ALLOWED_TOOLS. (#7) `validateBackend()` + `modelRoutingNote()`; `handleDispatchSubagent` now probes the resolved backend before dispatch — fail-fast `SUBAGENT not dispatched — could not reach …` if down, and a routing note in the started post (direct ignores the model id; bridge/ollama warn if the id isn't served). Connection errors fail; HTTP errors (e.g. /models unsupported) still proceed. (#6) clanker workers advisory-`claim` each file they actually write (once per path) and `release` on finish (finally, even on error/abort), so Active Claims shows worker ownership. Also de-staled the dispatch_subagent tool description (readonly/full are live). typecheck+build clean; mock-server smoke test green.
 - **P0 #1–3 (2026-05-31):** (#1) win32 `run_command` routes an allowlist of dev tools/builtins (mkdir, npm, npx, node, git, python, tsc, …) through `cmd.exe /d /s /c` via `needsWindowsShell()` in workerDenyList.ts — denylist + shell-operator ban still applied first; timeouts now tree-kill (`taskkill /T /F`) so a stalled npm doesn't orphan node. (#2) `propose_diff` writes the FULL diff to `.coordination/proposals/<path>-<ts>.diff` (git-ignored) and the board posts a short `→ saved to <path>` ref instead of a 160-char slice; `onToolCall` callback now passes the whole `WorkerToolResult`. (#3) `subagent.ts` shared `postChat()` + `describeFetchError()` turn bare `fetch failed` into `could not reach <backend> backend at <url> — is the model server running? (connection refused/…)`. typecheck+build clean; all three smoke-tested green.
