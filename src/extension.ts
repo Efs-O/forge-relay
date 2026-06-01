@@ -17,7 +17,7 @@ let runtimeManager: RuntimeManager | null = null;
 
 const ROSTER_KEY = 'agentwatch.sessionRoster';
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
     if (!workspaceRoot) {
         vscode.window.showWarningMessage('AgentWatch: Open a workspace folder first.');
@@ -25,7 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const config = vscode.workspace.getConfiguration('agentwatch');
-    const port = config.get<number>('port', 7878);
+    const desiredPort = config.get<number>('port', 7878);
     const coordPath = config.get<string>('coordinationPath', '').trim();
     const repoRoot = coordPath || workspaceRoot;
 
@@ -40,10 +40,13 @@ export function activate(context: vscode.ExtensionContext): void {
         forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
     });
 
+    let port: number;
     try {
-        mcpServer.start(port);
+        // Binds desiredPort if free, else scans upward — so multiple windows don't
+        // collide on one fixed port. `port` is the actual bound port from here on.
+        port = await mcpServer.start(desiredPort);
     } catch (err) {
-        vscode.window.showErrorMessage(`AgentWatch: Could not start MCP server on port ${port}. ${err}`);
+        vscode.window.showErrorMessage(`AgentWatch: Could not start MCP server (tried from port ${desiredPort}). ${err}`);
         return;
     }
 
@@ -139,13 +142,13 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
 
         vscode.commands.registerCommand('agentwatch.showMcpConfig', () => {
-            const cfg = buildMcpConfig(context.extensionUri.fsPath, repoRoot);
+            const cfg = buildMcpConfig(context.extensionUri.fsPath, repoRoot, mcpServer?.getPort() ?? port);
             vscode.workspace.openTextDocument({ content: cfg, language: 'markdown' })
                 .then(doc => vscode.window.showTextDocument(doc));
         }),
 
         vscode.commands.registerCommand('agentwatch.verifySetup', async () => {
-            const report = buildVerifySetupReport(context.extensionUri.fsPath, repoRoot);
+            const report = buildVerifySetupReport(context.extensionUri.fsPath, repoRoot, mcpServer?.getPort() ?? port);
             const doc = await vscode.workspace.openTextDocument({ content: report, language: 'markdown' });
             await vscode.window.showTextDocument(doc);
         }),
@@ -236,7 +239,7 @@ function statusBarIcon(status: RuntimeStatus): string {
     }
 }
 
-function buildMcpConfig(extensionPath: string, repoRoot: string): string {
+function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number): string {
     const stdioPath = getStdioPath(extensionPath);
     const repoRootNormalized = toForwardSlashes(repoRoot);
     const claudePaths = getClaudeConfigPaths(repoRoot);
@@ -284,7 +287,7 @@ function buildMcpConfig(extensionPath: string, repoRoot: string): string {
         '  "mcpServers": {',
         '    "agentwatch": {',
         '      "type": "sse",',
-        '      "url": "http://127.0.0.1:7878/sse"',
+        `      "url": "http://127.0.0.1:${mcpPort}/sse"`,
         '    }',
         '  }',
         '}',
@@ -299,7 +302,7 @@ function buildMcpConfig(extensionPath: string, repoRoot: string): string {
     ].join('\n');
 }
 
-function buildVerifySetupReport(extensionPath: string, repoRoot: string): string {
+function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort: number): string {
     const stdioPath = getStdioPath(extensionPath);
     const codexConfigPath = getCodexConfigPath();
     const claudePaths = getClaudeConfigPaths(repoRoot);
@@ -338,7 +341,7 @@ function buildVerifySetupReport(extensionPath: string, repoRoot: string): string
         `- Claude config status: ${summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])}.`,
         '- This command does not modify any config files.',
         '',
-        buildMcpConfig(extensionPath, repoRoot),
+        buildMcpConfig(extensionPath, repoRoot, mcpPort),
     ].join('\n');
 }
 

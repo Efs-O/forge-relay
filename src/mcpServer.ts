@@ -38,8 +38,16 @@ export class McpServer {
         this.subagentBackends = subagentBackends;
     }
 
-    start(port: number): void {
-        this.port = port;
+    /**
+     * Bind the MCP HTTP server. Tries `desiredPort` first and, if it is already
+     * in use (another AgentWatch window, a stale server), scans upward for a free
+     * port instead of failing. This keeps multiple VS Code windows from colliding
+     * on a single fixed port — the primary window keeps the configured port, and
+     * later windows transparently move up. Resolves with the actual bound port,
+     * which every consumer (Claude bridge URL, webview, config snippet) must read
+     * via {@link getPort} rather than assuming the default.
+     */
+    async start(desiredPort: number, maxAttempts = 20): Promise<number> {
         this.startBoardWatcher();
 
         this.httpServer = http.createServer(async (req, res) => {
@@ -53,7 +61,7 @@ export class McpServer {
                 return;
             }
 
-            const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+            const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
 
             if (req.method === 'GET' && url.pathname === '/sse') {
                 const server = this.buildMcpServer();
@@ -116,7 +124,7 @@ export class McpServer {
 
             if (req.method === 'GET' && url.pathname === '/health') {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ ok: true, port, transports: ['sse', 'streamable-http'] }));
+                res.end(JSON.stringify({ ok: true, port: this.port, transports: ['sse', 'streamable-http'] }));
                 return;
             }
 
@@ -124,8 +132,32 @@ export class McpServer {
             res.end('Not found');
         });
 
-        this.httpServer.listen(port, '127.0.0.1', () => {
-            console.log(`[AgentWatch] MCP server listening on http://127.0.0.1:${port}/sse`);
+        return this.listenWithFallback(desiredPort, maxAttempts);
+    }
+
+    /** Try to listen on `port`; on EADDRINUSE, retry the next port up to `attemptsLeft` times. */
+    private listenWithFallback(port: number, attemptsLeft: number): Promise<number> {
+        return new Promise((resolve, reject) => {
+            const server = this.httpServer;
+            if (!server) { reject(new Error('MCP http server not created')); return; }
+
+            const onError = (err: NodeJS.ErrnoException) => {
+                server.removeListener('error', onError);
+                if (err.code === 'EADDRINUSE' && attemptsLeft > 1) {
+                    console.log(`[AgentWatch] MCP port ${port} in use; trying ${port + 1}`);
+                    this.listenWithFallback(port + 1, attemptsLeft - 1).then(resolve, reject);
+                } else {
+                    reject(err);
+                }
+            };
+
+            server.once('error', onError);
+            server.listen(port, '127.0.0.1', () => {
+                server.removeListener('error', onError);
+                this.port = port;
+                console.log(`[AgentWatch] MCP server listening on http://127.0.0.1:${port}/sse`);
+                resolve(port);
+            });
         });
     }
 
