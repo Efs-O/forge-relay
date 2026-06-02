@@ -142,6 +142,7 @@
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.js",
     "codex:auto": "node scripts/codex-auto-bridge.js --repo-root ."
   },
   "devDependencies": {

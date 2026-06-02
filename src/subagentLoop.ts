@@ -3,8 +3,9 @@ import { Bridge } from './bridge';
 import {
     chatCompletionRaw, dispatchSubagentTier1, resolveModel, ResolvedModel,
     SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote,
-    forgeRoute, forgeEnsure, forgeRelease, forgeHealthz,
+    forgeRoute, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
+import { forgeHolds, forgeSlots } from './forgeHold';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 
 interface OpenAiToolCall {
@@ -26,6 +27,8 @@ export interface WorkerLoopOptions {
     onToolCall?: (name: string, res: WorkerToolResult) => void;
     /** Notified after each model turn with token usage (when the backend reports it). */
     onUsage?: (promptTokens: number, totalTokens: number) => void;
+    /** Notified before each transient-connection retry of a model turn (for board debug logging). */
+    onRetry?: (attempt: number, delayMs: number, err: BackendConnectionError) => void;
     signal?: AbortSignal;
 }
 
@@ -83,8 +86,13 @@ export async function runWorkerLoop(
             return { finalText: `Aborted: ${abort}`, steps: step, toolCalls, aborted: abort, promptTokens, totalTokens };
         }
 
-        const res = await chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal) as
-            { choices?: Array<{ message?: OpenAiMessage }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
+        // Fix B: a single transient ECONNRESET (e.g. a still-warming backend in the
+        // opening burst of a fan-out) is retried with short backoff instead of
+        // killing the worker. HTTP errors and aborts still surface immediately.
+        const res = await withConnRetry(
+            () => chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal),
+            { signal: opts.signal, onRetry: opts.onRetry },
+        ) as { choices?: Array<{ message?: OpenAiMessage }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
 
         // Track context/token usage when the backend reports it (llama.cpp, Ollama
         // and the bridge all include an OpenAI `usage` block).
@@ -180,13 +188,19 @@ export async function handleDispatchSubagent(
 
     // Resolve the worker endpoint and a teardown hook. The Forge route (opt-in,
     // forgeControlUrl set or a "forge:" prefix) asks Forge to load the model and
-    // wait until it is healthy, then dispatches to the endpoint Forge returns —
-    // every successful /ensure is paired with a /release in `release()`. When the
-    // Forge route is off, this is exactly the previous direct/ollama/bridge probe.
+    // wait until it is healthy, then dispatches to the endpoint Forge returns.
+    // Instead of one /ensure + /release per worker (N racing cycles on a same-model
+    // fan-out), it joins a process-wide ref-counted batch hold: the first worker
+    // ensures, concurrent same-model workers reuse the load, the last to finish
+    // releases — exactly 1 /ensure + 1 /release per overlapping batch (Fix A). A
+    // per-model slot cap then bounds in-flight workers to n_parallel (Fix C). When
+    // the Forge route is off, this is exactly the previous direct/ollama/bridge probe.
     const route = forgeRoute(model, backends);
     let resolved: ResolvedModel;
     let modelNote = '';
     let release: () => Promise<void> = async () => { /* no-op when not routing via Forge */ };
+    // Off the Forge route there is no slot cap — non-Forge routing is unchanged.
+    let acquireSlot: () => Promise<() => void> = async () => () => { /* no-op */ };
 
     if (route.viaForge && !backends.forgeControlUrl) {
         // A "forge:" prefix was used but no control URL is configured.
@@ -200,10 +214,13 @@ export async function handleDispatchSubagent(
             return `SUBAGENT not dispatched (${model}) — ${msg}`;
         }
         try {
-            const ensured = await forgeEnsure(controlUrl, route.model);
-            // Show the real backend Forge loaded the model on (llamacpp/ollama/…),
-            // with a "via Forge" marker so the routing is still visible on the board.
-            resolved = { backend: ensured.backend, model: ensured.model, baseUrl: ensured.baseUrl };
+            const hold = await forgeHolds.acquire(controlUrl, route.model, () => {
+                bridge.post(worker, `⚠ Forge /release for ${route.model} not confirmed — its load may stay held`);
+            });
+            // The resolved endpoint carries the real backend Forge loaded the model
+            // on (llamacpp/ollama/…); the "via Forge" marker keeps routing visible.
+            resolved = hold.resolved;
+            release = hold.release;
             modelNote = ' (via Forge)';
         } catch (err) {
             // 404 unknown / 409 busy / 502 load error all arrive as clear messages.
@@ -211,15 +228,9 @@ export async function handleDispatchSubagent(
             bridge.post(worker, `not dispatched (${model}): ${msg}`.slice(0, 300));
             return `SUBAGENT not dispatched (${model}) — ${msg}`;
         }
-        let released = false;
-        release = async () => {
-            if (released) { return; }
-            released = true;
-            const ok = await forgeRelease(controlUrl, route.model);
-            if (!ok) {
-                bridge.post(worker, `⚠ Forge /release for ${route.model} not confirmed — its load may stay held`);
-            }
-        };
+        // Bound same-model fan-out to the slot count; the (N+1)th worker queues
+        // here instead of oversubscribing the backend.
+        acquireSlot = () => forgeSlots.acquire(route.model);
     } else {
         // #7: validate the backend is reachable before we post "dispatched" or burn
         // a turn. Fail fast with a clear message if the model server is down;
@@ -235,12 +246,14 @@ export async function handleDispatchSubagent(
 
     // Tier 1 — reasoning-only completion.
     if (requestedTools === 'none') {
+        const slot = await acquireSlot();
         try {
             const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context }, resolved);
             return r.status === 'completed'
                 ? `SUBAGENT ${r.subagentId} (${model})${modelNote} COMPLETED:\n\n${r.result}`
                 : `SUBAGENT ${r.subagentId} (${model}) ERROR: ${r.error}`;
         } finally {
+            slot();
             await release();
         }
     }
@@ -264,11 +277,20 @@ export async function handleDispatchSubagent(
         // file. Released when the worker finishes (even on error/abort).
         const claimed = new Set<string>();
         let warnedCtx = false;
+        // Fix C: hold a slot for the whole worker run so a same-model fan-out never
+        // exceeds n_parallel in flight; the (N+1)th worker queues here. No-op off
+        // the Forge route. Acquired inside runWork so async dispatches queue in the
+        // background rather than blocking the dispatch call.
+        const slot = await acquireSlot();
         try {
             const result = await runWorkerLoop(resolved, ctx, task, context, {
                 shouldAbort: () => {
                     const blocking = bridge.getBlockingCommands(worker);
                     return blocking.length ? `board STOP/PAUSE (${blocking[0].text})` : null;
+                },
+                onRetry: (attempt, delayMs, err) => {
+                    // Surface the transient churn so it is visible but non-fatal.
+                    bridge.post(worker, `⚠ transient ${err.code ?? 'conn'} — retry ${attempt} in ${delayMs}ms: ${err.message.replace(/\s+/g, ' ').slice(0, 100)}`.slice(0, 200));
                 },
                 onUsage: (prompt) => {
                     // #4: surface context pressure once, so a long worker run that's
@@ -303,6 +325,9 @@ export async function handleDispatchSubagent(
             for (const p of claimed) {
                 try { bridge.release(worker, [p], `worker ${subagentId.slice(0, 10)} done`); } catch { /* ignore */ }
             }
+            // Free the slot before releasing the model hold so a queued sibling can
+            // start immediately while we drop our share of the batch hold.
+            slot();
             // Forge ref-count discipline: release the model hold whether the worker
             // finished, errored, or aborted. Runs once for both sync and async, since
             // runWork wraps the entire worker run in either mode (no-op off the route).

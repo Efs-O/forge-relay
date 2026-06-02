@@ -144,7 +144,11 @@ async function postChat(
         res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
     } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') { throw err; }
-        throw new Error(describeFetchError(err, url, resolved.backend));
+        // Connection-level failure (refused / reset / DNS / socket hang-up). Tag it
+        // so callers can retry it transiently; an HTTP error response (below) is a
+        // real answer from the server and must NOT be retried.
+        const code = (err as { cause?: { code?: string } } | undefined)?.cause?.code;
+        throw new BackendConnectionError(describeFetchError(err, url, resolved.backend), code);
     }
     if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -171,6 +175,64 @@ export async function chatCompletion(
         throw new Error(`${resolved.backend} backend returned no message content`);
     }
     return content.trim();
+}
+
+/**
+ * A connection-level failure talking to a backend (ECONNRESET / ECONNREFUSED /
+ * `fetch failed` / socket hang-up), as opposed to an HTTP error response. These
+ * are transient — a still-warming backend or a momentary reset under load — and
+ * safe to retry. {@link postChat} throws this only from its connect/transport
+ * catch; non-2xx responses stay plain `Error`s and are never retried.
+ */
+export class BackendConnectionError extends Error {
+    constructor(message: string, public readonly code?: string) {
+        super(message);
+        this.name = 'BackendConnectionError';
+    }
+}
+
+/** Default backoff for {@link withConnRetry}: 3 retries (4 attempts total). */
+const CONN_RETRY_DELAYS_MS = [250, 1_000, 2_000];
+
+export interface ConnRetryHooks {
+    /** Aborts both the in-flight call and any pending backoff sleep. */
+    signal?: AbortSignal;
+    /** Override the backoff schedule (one entry per retry). */
+    delaysMs?: number[];
+    /** Called before each retry sleep (e.g. to log the churn to the board). */
+    onRetry?: (attempt: number, delayMs: number, err: BackendConnectionError) => void;
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const abortErr = (): Error => { const e = new Error('Aborted'); e.name = 'AbortError'; return e; };
+        if (signal?.aborted) { reject(abortErr()); return; }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); reject(abortErr()); }, { once: true });
+    });
+}
+
+/**
+ * Run a backend call, retrying ONLY connection-level failures
+ * ({@link BackendConnectionError}) with short exponential backoff
+ * (250ms → 1s → 2s by default). HTTP 4xx/5xx responses and aborts surface
+ * immediately. Keeps a single transient `ECONNRESET` (e.g. dispatching against a
+ * still-warming backend) from killing a whole worker (Fix B).
+ */
+export async function withConnRetry<T>(doCall: () => Promise<T>, hooks: ConnRetryHooks = {}): Promise<T> {
+    const delays = hooks.delaysMs ?? CONN_RETRY_DELAYS_MS;
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await doCall();
+        } catch (err) {
+            if (!(err instanceof BackendConnectionError) || attempt >= delays.length) {
+                throw err;
+            }
+            const ms = delays[attempt];
+            hooks.onRetry?.(attempt + 1, ms, err);
+            await sleepAbortable(ms, hooks.signal);
+        }
+    }
 }
 
 /** Low-level OpenAI-compatible chat call returning the raw parsed response (for tool-calling loops). */
