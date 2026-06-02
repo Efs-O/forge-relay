@@ -7,11 +7,14 @@ import { EventTail } from './eventTail';
 import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
 import { handleDispatchSubagent } from './subagentLoop';
 
-// --repoRoot <path>  (defaults to cwd)
+// repoRoot resolution order: AGENTWATCH_REPO_ROOT env wins, then --repoRoot, then
+// cwd. The codex/claude auto-bridge injects AGENTWATCH_REPO_ROOT with the actual
+// workspace it is running in, which must override the --repoRoot baked into the
+// *global* ~/.codex/config.toml — otherwise every codex window posts to whichever
+// single repo that config names, instead of its own workspace board.
 const repoRootArg = process.argv.indexOf('--repoRoot');
-const repoRoot = repoRootArg !== -1
-    ? process.argv[repoRootArg + 1]
-    : process.cwd();
+const repoRoot = process.env.AGENTWATCH_REPO_ROOT
+    || (repoRootArg !== -1 ? process.argv[repoRootArg + 1] : process.cwd());
 
 const bridge = new Bridge(repoRoot);
 // B7: single source of truth for the coordination dir — ask the bridge rather

@@ -325,6 +325,11 @@ class CodexBridge {
         process.stdout.write(`starting codex app-server on ws://${host}:${port}\n`);
         this.server = spawnCli('codex', ['app-server', '--listen', `ws://${host}:${port}`], {
             cwd: this.options.repoRoot,
+            // Tell our MCP stdio server which workspace this codex belongs to. codex's
+            // config.toml is global and hardcodes one --repoRoot, so without this every
+            // codex window would post to that one repo's board. mcpStdio prefers this
+            // env over the arg; codex inherits it and passes it to the MCP child.
+            env: { ...process.env, AGENTWATCH_REPO_ROOT: this.options.repoRoot },
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
