@@ -1,5 +1,10 @@
 .vscode/**
 src/**
+tests/**
+out/tests/**
+smoke/**
+.pytest_cache/**
+**/__pycache__/**
 scripts/**
 !scripts/codex-auto-bridge.js
 !scripts/claude-auto-bridge.js
