@@ -315,6 +315,7 @@ class CodexBridge {
         this.options = options;
         this.queue = [];
         this.processing = false;
+        this.partialLine = '';
         this.lastSize = 0;
         this.lastTriggerAt = 0;
         this.threadId = null;
@@ -508,6 +509,7 @@ class CodexBridge {
         if (stat.size < this.lastSize) {
             process.stdout.write(`board file shrank from ${this.lastSize} to ${stat.size}; resetting cursor\n`);
             this.lastSize = 0;
+            this.partialLine = '';
         }
         if (stat.size <= this.lastSize) {
             return;
@@ -519,8 +521,11 @@ class CodexBridge {
             const buffer = Buffer.alloc(length);
             fs.readSync(fd, buffer, 0, length, this.lastSize);
             this.lastSize = stat.size;
+            const chunk = this.partialLine + buffer.toString('utf8');
+            const lines = chunk.split('\n');
+            this.partialLine = lines.pop() || '';
 
-            for (const line of buffer.toString('utf8').split('\n')) {
+            for (const line of lines) {
                 const trimmed = line.trim();
                 if (!trimmed) {
                     continue;

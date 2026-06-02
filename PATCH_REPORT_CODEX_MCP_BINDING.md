@@ -86,17 +86,48 @@ Applied follow-up patch:
 
 This makes the Codex event tailer recover correctly when the board file is truncated or recreated.
 
+## Follow-up Fix: Partial-Line NDJSON Reads
+
+After the truncation fix, another failure mode was identified in the same event tailer.
+
+The board file is NDJSON and can be appended while the bridge is polling it. The previous implementation split the newly read bytes on `\n` and immediately attempted to parse every segment as JSON. That is unsafe when the final line has been only partially written at the time of the read.
+
+Observed symptom:
+
+- the board file contained valid JSON entries
+- `codex-bridge.log` still reported invalid JSON parse errors such as:
+  - `Unexpected non-whitespace character after JSON at position 2`
+- Codex then missed the user event and did not reply
+
+Root cause:
+
+- the final segment from `split('\n')` may be an incomplete JSON line
+- the bridge attempted to parse it anyway
+- the file cursor was advanced, so the completed line was never re-read
+
+Applied follow-up patch:
+
+- added an in-memory `partialLine` buffer
+- prepend `partialLine` to the next read chunk
+- parse only complete newline-terminated lines
+- keep the final incomplete segment buffered until the next scan
+- clear `partialLine` when the board file shrinks/reset is detected
+
+This makes the bridge robust against partial NDJSON writes during active board updates.
+
 ## Commits
 
 - `fcdebef` — `Bind Codex bridge to workspace MCP`
-- pending new commit for the board truncation/reset fix
+- `26fc1e6` — `Handle board file truncation in Codex bridge`
+- pending new commit for the partial-line NDJSON fix
 
 ## Artifacts
 
 Built VSIX:
 
 - `agentwatch-0.3.5-fcdebef.vsix`
-- pending new VSIX for the follow-up truncation/reset fix
+- `agentwatch-0.3.5-26fc1e6.vsix`
+- pending new VSIX for the partial-line NDJSON fix
 
 ## Operational Note
 
