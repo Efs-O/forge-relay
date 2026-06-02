@@ -125,6 +125,38 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Mirror everything the bridge writes to stdout/stderr into a per-workspace log
+// file. VS Code does not persist an extension child's console output anywhere
+// readable, so without this the bridge's turn handling (event triggers, codex
+// app-server output, stalls, errors) is invisible after the fact. Lines are
+// timestamped; the file lives next to the board at <repoRoot>/.coordination/.
+function teeToLogFile(eventPath) {
+    try {
+        const logPath = path.join(path.dirname(eventPath), 'codex-bridge.log');
+        const stream = fs.createWriteStream(logPath, { flags: 'a' });
+        stream.write(`\n==== codex bridge start ${new Date().toISOString()} (pid ${process.pid}) ====\n`);
+        for (const name of ['stdout', 'stderr']) {
+            const orig = process[name].write.bind(process[name]);
+            let buf = '';
+            process[name].write = (...args) => {
+                try {
+                    buf += String(args[0]);
+                    let nl;
+                    while ((nl = buf.indexOf('\n')) !== -1) {
+                        stream.write(`[${new Date().toISOString()}] ${buf.slice(0, nl)}\n`);
+                        buf = buf.slice(nl + 1);
+                    }
+                } catch {
+                    // never let logging break the bridge
+                }
+                return orig(...args);
+            };
+        }
+    } catch (err) {
+        process.stderr.write(`failed to set up bridge file log: ${err && err.message}\n`);
+    }
+}
+
 // Emit a machine-readable status line the AgentWatch supervisor parses to drive
 // the per-agent status dot (see src/runtimeBridge.ts).
 function emitStatus(token) {
@@ -454,7 +486,9 @@ class CodexBridge {
                     process.stderr.write(`skipping invalid event JSON: ${error.message}\n`);
                     continue;
                 }
-                if (shouldTrigger(event, this.options.agent, this.options.mode)) {
+                const trig = shouldTrigger(event, this.options.agent, this.options.mode);
+                process.stdout.write(`event ${event.type}/${event.agent}: ${trig ? 'TRIGGER' : 'skip'} — ${summarizeEvent(event).slice(0, 100)}\n`);
+                if (trig) {
                     this.queue.push(event);
                 }
             }
@@ -541,6 +575,8 @@ class CodexBridge {
 
 async function main() {
     const options = parseArgs(process.argv.slice(2));
+    teeToLogFile(options.eventPath);
+    process.stdout.write(`codex bridge: tailing board ${options.eventPath} (repoRoot=${options.repoRoot})\n`);
     emitStatus('waiting');
     const bridge = new CodexBridge(options);
 

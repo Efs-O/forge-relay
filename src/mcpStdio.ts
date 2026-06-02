@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import * as fs from 'fs';
+import * as path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -20,6 +22,20 @@ const bridge = new Bridge(repoRoot);
 // B7: single source of truth for the coordination dir — ask the bridge rather
 // than recomputing the path here, so the two can never drift apart.
 const eventsPath = bridge.getEventsPath();
+
+// Routing breadcrumb: which board THIS MCP server (the one codex spawned) writes
+// to, and whether the per-workspace env override actually reached us. Written to
+// a file, never stdout — stdout is the JSON-RPC channel and must stay clean.
+try {
+    const argRepo = repoRootArg !== -1 ? process.argv[repoRootArg + 1] : '(none)';
+    fs.appendFileSync(
+        path.join(path.dirname(eventsPath), 'mcpstdio.log'),
+        `[${new Date().toISOString()}] mcpStdio start pid=${process.pid} -> board=${eventsPath} `
+        + `(env AGENTWATCH_REPO_ROOT=${process.env.AGENTWATCH_REPO_ROOT || '(unset)'}, --repoRoot arg=${argRepo})\n`,
+    );
+} catch {
+    // logging is best-effort; never block startup
+}
 
 // Subagent backends — defaults can be overridden via env vars so Codex (which
 // spawns this stdio server itself) can point at the same endpoints as the
