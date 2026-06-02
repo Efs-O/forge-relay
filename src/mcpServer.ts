@@ -141,8 +141,12 @@ export class McpServer {
             const server = this.httpServer;
             if (!server) { reject(new Error('MCP http server not created')); return; }
 
-            const onError = (err: NodeJS.ErrnoException) => {
+            const cleanup = (): void => {
                 server.removeListener('error', onError);
+                server.removeListener('listening', onListening);
+            };
+            const onError = (err: NodeJS.ErrnoException): void => {
+                cleanup();
                 if (err.code === 'EADDRINUSE' && attemptsLeft > 1) {
                     console.log(`[AgentWatch] MCP port ${port} in use; trying ${port + 1}`);
                     this.listenWithFallback(port + 1, attemptsLeft - 1).then(resolve, reject);
@@ -150,14 +154,22 @@ export class McpServer {
                     reject(err);
                 }
             };
-
-            server.once('error', onError);
-            server.listen(port, '127.0.0.1', () => {
-                server.removeListener('error', onError);
+            const onListening = (): void => {
+                cleanup();
                 this.port = port;
                 console.log(`[AgentWatch] MCP server listening on http://127.0.0.1:${port}/sse`);
                 resolve(port);
-            });
+            };
+
+            // Do NOT use listen(port, host, cb): that callback is registered as a
+            // once('listening') handler that is NOT cleared when the bind fails with
+            // EADDRINUSE, so on the retry's successful bind the stale callback ALSO
+            // fires and resolves with the wrong (original) port — which then becomes
+            // the bridge URL and the board's displayed port. Our own removable
+            // listeners, cleared on every attempt, avoid that cross-attempt leak.
+            server.once('error', onError);
+            server.once('listening', onListening);
+            server.listen(port, '127.0.0.1');
         });
     }
 
