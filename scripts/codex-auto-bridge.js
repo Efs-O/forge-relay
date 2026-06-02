@@ -505,6 +505,10 @@ class CodexBridge {
         }
 
         const stat = fs.statSync(this.options.eventPath);
+        if (stat.size < this.lastSize) {
+            process.stdout.write(`board file shrank from ${this.lastSize} to ${stat.size}; resetting cursor\n`);
+            this.lastSize = 0;
+        }
         if (stat.size <= this.lastSize) {
             return;
         }
