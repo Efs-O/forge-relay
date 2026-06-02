@@ -1,36 +1,8 @@
 #!/usr/bin/env node
 
 const fs = require('node:fs');
-const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-
-// Find a free TCP port for our app-server, starting at `start` and scanning
-// upward. The ws port is purely internal to this bridge (the same process spawns
-// the app-server AND connects to it), so each window can pick its own free port
-// rather than fighting over one fixed default. This replaces the old kill-the-
-// holder reaper, which could not tell a crash-orphan from another window's
-// healthy app-server and would start a cross-window kill war on the shared port.
-function findFreePort(start, attempts = 50) {
-    return new Promise((resolve, reject) => {
-        let port = start;
-        const tryOne = () => {
-            const srv = net.createServer();
-            srv.once('error', (err) => {
-                if (err.code === 'EADDRINUSE' && attempts-- > 0) {
-                    port += 1;
-                    tryOne();
-                } else {
-                    reject(err);
-                }
-            });
-            srv.listen(port, '127.0.0.1', () => {
-                srv.close(() => resolve(port));
-            });
-        };
-        tryOne();
-    });
-}
 
 // Windows-safe CLI launcher. `codex`/`claude` are installed as .cmd shims, which
 // Node's spawn cannot execute directly with shell:false. On win32 we go through
@@ -349,37 +321,79 @@ class CodexBridge {
 
     async #startServer() {
         const { host } = this.options;
-        // Pick a free ws port (scanning up from the requested one) so multiple
-        // windows never collide on a single fixed port. #connectRpc reads the same
-        // this.options.port, so both sides agree on whatever we land on.
-        const port = await findFreePort(this.options.port);
-        this.options.port = port;
-        process.stdout.write(`starting codex app-server on ws://${host}:${port}\n`);
-        this.server = spawnCli('codex', ['app-server', '--listen', `ws://${host}:${port}`], {
-            cwd: this.options.repoRoot,
-            // Tell our MCP stdio server which workspace this codex belongs to. codex's
-            // config.toml is global and hardcodes one --repoRoot, so without this every
-            // codex window would post to that one repo's board. mcpStdio prefers this
-            // env over the arg; codex inherits it and passes it to the MCP child.
-            env: { ...process.env, AGENTWATCH_REPO_ROOT: this.options.repoRoot },
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
+        const startPort = this.options.port;
+        const maxAttempts = 20;
+        // Let codex itself attempt the bind and scan upward only when it actually
+        // fails to bind. This is race-free, unlike a pre-probe: a free-port probe
+        // that binds-then-closes leaves a window where another VS Code window grabs
+        // the same port, after which BOTH spawn on it — the loser's app-server dies
+        // with EADDRINUSE and (previously) the bridge blindly connected to the
+        // WINNER's app-server, so two workspaces ended up driving one codex.
+        for (let i = 0; i < maxAttempts; i += 1) {
+            const port = startPort + i;
+            const bound = await this.#trySpawnServer(host, port);
+            if (bound) {
+                this.options.port = port;
+                return;
+            }
+            process.stderr.write(`codex app-server could not bind ws port ${port} (in use); trying ${port + 1}\n`);
+        }
+        throw new Error(`codex app-server could not bind a ws port in ${startPort}..${startPort + maxAttempts - 1}`);
+    }
 
-        this.server.stdout.on('data', (chunk) => process.stdout.write(`[codex-app] ${chunk}`));
-        this.server.stderr.on('data', (chunk) => process.stderr.write(`[codex-app] ${chunk}`));
-        this.server.on('error', (error) => {
-            // Most commonly ENOENT — the `codex` CLI is not on PATH. Signal the
-            // supervisor that this runtime is unsupported instead of crash-looping.
-            emitStatus('unsupported');
-            process.stderr.write(`codex CLI could not be launched: ${error.message}\n`);
-            process.exit(127);
-        });
-        this.server.on('exit', (code, signal) => {
-            process.stderr.write(`codex app-server exited code=${code} signal=${signal}\n`);
-            process.exitCode = code || 1;
-        });
+    // Spawn the app-server on `port`; resolve true if it stays up (bound), false if
+    // it exits early (port in use). On success the long-term exit handler is wired
+    // and this.server is set. We only ever connect to a server WE successfully
+    // spawned — never to whatever happens to already be on the port.
+    #trySpawnServer(host, port) {
+        return new Promise((resolve) => {
+            process.stdout.write(`starting codex app-server on ws://${host}:${port}\n`);
+            const server = spawnCli('codex', ['app-server', '--listen', `ws://${host}:${port}`], {
+                cwd: this.options.repoRoot,
+                // Best-effort hint for the MCP stdio child. NOTE: codex does not
+                // forward this env to MCP servers it spawns (confirmed via mcpstdio
+                // log), so per-workspace board routing cannot rely on it — kept only
+                // in case a future codex version does propagate env.
+                env: { ...process.env, AGENTWATCH_REPO_ROOT: this.options.repoRoot },
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
 
-        await sleep(1000);
+            server.stdout.on('data', (chunk) => process.stdout.write(`[codex-app] ${chunk}`));
+            server.stderr.on('data', (chunk) => process.stderr.write(`[codex-app] ${chunk}`));
+
+            let settled = false;
+            const onEarlyError = (error) => {
+                if (settled) { return; }
+                settled = true;
+                // Most commonly ENOENT — the `codex` CLI is not on PATH.
+                emitStatus('unsupported');
+                process.stderr.write(`codex CLI could not be launched: ${error.message}\n`);
+                process.exit(127);
+            };
+            const onEarlyExit = (code, signal) => {
+                if (settled) { return; }
+                settled = true;
+                process.stderr.write(`codex app-server exited during startup code=${code} signal=${signal}\n`);
+                try { server.removeAllListeners(); } catch { /* ignore */ }
+                resolve(false);
+            };
+            server.once('error', onEarlyError);
+            server.once('exit', onEarlyExit);
+
+            // If it hasn't died within the settle window, treat it as bound and
+            // promote to the long-term exit handler.
+            setTimeout(() => {
+                if (settled) { return; }
+                settled = true;
+                server.removeListener('exit', onEarlyExit);
+                server.on('exit', (code, signal) => {
+                    process.stderr.write(`codex app-server exited code=${code} signal=${signal}\n`);
+                    process.exitCode = code || 1;
+                });
+                this.server = server;
+                resolve(true);
+            }, 1500);
+        });
     }
 
     async #connectRpc() {

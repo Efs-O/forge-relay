@@ -31,7 +31,7 @@ try {
     fs.appendFileSync(
         path.join(path.dirname(eventsPath), 'mcpstdio.log'),
         `[${new Date().toISOString()}] mcpStdio start pid=${process.pid} -> board=${eventsPath} `
-        + `(env AGENTWATCH_REPO_ROOT=${process.env.AGENTWATCH_REPO_ROOT || '(unset)'}, --repoRoot arg=${argRepo})\n`,
+        + `(env AGENTWATCH_REPO_ROOT=${process.env.AGENTWATCH_REPO_ROOT || '(unset)'}, --repoRoot arg=${argRepo}, cwd=${process.cwd()})\n`,
     );
 } catch {
     // logging is best-effort; never block startup
