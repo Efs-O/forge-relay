@@ -30,6 +30,8 @@ function parseArgs(argv) {
         eventPath: '',
         host: '127.0.0.1',
         idleMs: 500,
+        mcpRepoRoot: '',
+        mcpStdioPath: '',
         mode: 'mentions',
         port: 8781,
         repoRoot: process.cwd(),
@@ -65,6 +67,14 @@ function parseArgs(argv) {
                 args.idleMs = Number(value);
                 i += 1;
                 break;
+            case '--mcp-repo-root':
+                args.mcpRepoRoot = value;
+                i += 1;
+                break;
+            case '--mcp-stdio-path':
+                args.mcpStdioPath = value;
+                i += 1;
+                break;
             case '--mode':
                 args.mode = value;
                 i += 1;
@@ -87,6 +97,12 @@ function parseArgs(argv) {
     }
 
     args.repoRoot = path.resolve(args.repoRoot);
+    if (args.mcpRepoRoot) {
+        args.mcpRepoRoot = path.resolve(args.mcpRepoRoot);
+    }
+    if (args.mcpStdioPath) {
+        args.mcpStdioPath = path.resolve(args.mcpStdioPath);
+    }
     args.eventPath = args.eventPath
         ? path.resolve(args.eventPath)
         : path.join(args.repoRoot, '.coordination', 'events.ndjson');
@@ -348,7 +364,19 @@ class CodexBridge {
     #trySpawnServer(host, port) {
         return new Promise((resolve) => {
             process.stdout.write(`starting codex app-server on ws://${host}:${port}\n`);
-            const server = spawnCli('codex', ['app-server', '--listen', `ws://${host}:${port}`], {
+            const appArgs = ['app-server'];
+            if (this.options.mcpStdioPath && this.options.mcpRepoRoot) {
+                const quotedScript = JSON.stringify(this.options.mcpStdioPath);
+                const quotedRepoRoot = JSON.stringify(this.options.mcpRepoRoot);
+                appArgs.push(
+                    '-c',
+                    'mcp_servers.agentwatch.command="node"',
+                    '-c',
+                    `mcp_servers.agentwatch.args=[${quotedScript},"--repoRoot",${quotedRepoRoot}]`,
+                );
+            }
+            appArgs.push('--listen', `ws://${host}:${port}`);
+            const server = spawnCli('codex', appArgs, {
                 cwd: this.options.repoRoot,
                 // Best-effort hint for the MCP stdio child. NOTE: codex does not
                 // forward this env to MCP servers it spawns (confirmed via mcpstdio

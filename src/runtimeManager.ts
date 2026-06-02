@@ -18,6 +18,8 @@ export interface RuntimeManagerOptions {
     codexScriptPath: string;
     /** Absolute path to scripts/claude-auto-bridge.js */
     claudeScriptPath: string;
+    /** Absolute path to out/mcpStdio.js, used to bind Codex to this workspace's board. */
+    mcpStdioPath: string;
     /** SSE URL of the AgentWatch MCP server, attached to the headless Claude bridge. */
     mcpUrl: string;
     repoRoot: string;
@@ -47,12 +49,14 @@ export class RuntimeManager {
     private claudeMode: ClaudeMode = 'A';
 
     constructor(opts: RuntimeManagerOptions) {
+        const codexArgs = ['--mcp-stdio-path', opts.mcpStdioPath, '--mcp-repo-root', opts.repoRoot];
         this.codex = new ScriptRuntimeBridge({
             agent: 'codex',
             scriptPath: opts.codexScriptPath,
             repoRoot: opts.repoRoot,
             eventsPath: opts.eventsPath,
             nodePath: opts.nodePath,
+            extraArgs: codexArgs,
             linkedPattern: /codex thread started/i,
             onStatus: () => this.emit(),
             onLog: opts.onLog,

@@ -63,6 +63,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     runtimeManager = new RuntimeManager({
         codexScriptPath: path.join(context.extensionUri.fsPath, 'scripts', 'codex-auto-bridge.js'),
         claudeScriptPath: path.join(context.extensionUri.fsPath, 'scripts', 'claude-auto-bridge.js'),
+        mcpStdioPath: path.join(context.extensionUri.fsPath, 'out', 'mcpStdio.js'),
         mcpUrl: `http://127.0.0.1:${port}/sse`,
         repoRoot,
         eventsPath,
