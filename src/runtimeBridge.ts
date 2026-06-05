@@ -1,17 +1,20 @@
 import { spawn, spawnSync, ChildProcess } from 'child_process';
+import * as path from 'path';
+import { RuntimeLease, RuntimeLeaseStatus } from './runtimeLease';
 
 /**
  * Runtime status for an agent's wakeup bridge, surfaced as the per-agent status
- * dot in the panel (see AUTO_TRIGGER_AND_SUBAGENTS_PLAN.md Part 2.4):
+ * dot in the panel.
  *
- *  - inactive    — not connected / not selected for this session
- *  - waiting     — child spawned, runtime still coming up
- *  - linked      — runtime is up and tailing the board (real wakeup path live)
- *  - error       — crashed; the supervisor is backing off and will restart
- *  - unsupported — the underlying CLI (e.g. `codex`) is not installed
- *  - stopped     — gave up after exhausting restarts
+ *  - inactive    not connected / not selected for this session
+ *  - waiting     child spawned, runtime still coming up
+ *  - linked      runtime is up and tailing the board
+ *  - follower    another window owns the managed bridge for this repo
+ *  - error       crashed; the supervisor is backing off and will restart
+ *  - unsupported the underlying CLI is not installed
+ *  - stopped     gave up after exhausting restarts
  */
-export type RuntimeStatus = 'inactive' | 'waiting' | 'linked' | 'error' | 'unsupported' | 'stopped';
+export type RuntimeStatus = 'inactive' | 'waiting' | 'linked' | 'follower' | 'error' | 'unsupported' | 'stopped';
 
 export interface AgentRuntimeBridge {
     readonly agent: string;
@@ -23,15 +26,11 @@ export interface AgentRuntimeBridge {
 
 export interface RuntimeBridgeOptions {
     agent: string;
-    /** Absolute path to the bridge script (codex-auto-bridge.js / claude-auto-bridge.js). */
     scriptPath: string;
     repoRoot: string;
     eventsPath: string;
-    /** Extra CLI args appended after the standard --repo-root/--event-path/--agent. */
     extraArgs?: string[];
-    /** Optional fallback regex that also flips status to "linked" if matched in output. */
     linkedPattern?: RegExp;
-    /** `node` binary to run the bridge with. Defaults to "node" on PATH. */
     nodePath?: string;
     onStatus?: (status: RuntimeStatus, detail: string) => void;
     onLog?: (line: string) => void;
@@ -40,14 +39,9 @@ export interface RuntimeBridgeOptions {
 const RESTART_BASE_MS = 1_000;
 const RESTART_MAX_MS = 15_000;
 const MAX_RESTARTS = 6;
+const LEASE_HEARTBEAT_MS = 5_000;
+const FOLLOWER_RETRY_MS = 10_000;
 
-/**
- * Supervises a bridge script (codex-auto-bridge.js or claude-auto-bridge.js) as a
- * managed child process: launches it, parses its `[[AW_STATUS]]` markers to track
- * health, and restarts it with exponential backoff if it dies unexpectedly. This
- * is the "productized" form of the previously-manual `npm run codex:auto`
- * (plan Part 2.2, Phases P2/P4).
- */
 export class ScriptRuntimeBridge implements AgentRuntimeBridge {
     readonly agent: string;
 
@@ -58,9 +52,15 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
     private restartAttempts = 0;
     private restartTimer: NodeJS.Timeout | null = null;
     private markedUnsupported = false;
+    private readonly lease: RuntimeLease;
+    private ownsLease = false;
+    private leaseHeartbeatTimer: NodeJS.Timeout | null = null;
+    private leaseRetryTimer: NodeJS.Timeout | null = null;
+    private stopping = false;
 
     constructor(private readonly opts: RuntimeBridgeOptions) {
         this.agent = opts.agent;
+        this.lease = new RuntimeLease(path.dirname(opts.eventsPath), opts.agent, opts.repoRoot, process.pid);
     }
 
     status(): RuntimeStatus {
@@ -73,48 +73,72 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
 
     start(): void {
         this.wantRunning = true;
+        this.stopping = false;
         this.markedUnsupported = false;
-        this.restartAttempts = 0;
-        if (this.child) {
+        if (this.child || this.leaseRetryTimer) {
             return;
         }
-        this.spawnChild();
+        this.restartAttempts = 0;
+        this.tryBecomeOwner();
     }
 
     stop(): void {
         this.wantRunning = false;
+        this.stopping = true;
         if (this.restartTimer) {
             clearTimeout(this.restartTimer);
             this.restartTimer = null;
         }
-        const child = this.child;
-        this.child = null;
-        if (child) {
-            this.killChild(child);
+        this.clearFollowerRetry();
+        this.stopLeaseHeartbeat();
+        if (this.child) {
+            this.killChild(this.child);
+            return;
         }
+        this.releaseLease();
+        this.stopping = false;
         this.setStatus('inactive', 'Disconnected.');
     }
 
-    /**
-     * Kill the bridge child AND its descendants. The bridge script spawns the
-     * agent CLI (codex/claude) through a shell on Windows (.cmd shims), so a plain
-     * kill() only reaps the cmd.exe wrapper and orphans the real app-server —
-     * which then holds its port and goes stale. taskkill /T tears down the whole
-     * tree so nothing is left behind.
-     */
     private killChild(child: ChildProcess): void {
         if (process.platform === 'win32' && child.pid) {
             try {
                 spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F']);
                 return;
-            } catch { /* fall through to kill() */ }
+            } catch {
+                // Fall through to child.kill().
+            }
         }
-        try { child.kill(); } catch { /* already gone */ }
+        try {
+            child.kill();
+        } catch {
+            // Already gone.
+        }
+    }
+
+    private tryBecomeOwner(): void {
+        if (!this.wantRunning || this.child) {
+            return;
+        }
+        const result = this.lease.tryAcquire();
+        if (result === 'held-by-live-other') {
+            this.ownsLease = false;
+            this.setStatus('follower', `${this.agent} bridge owned by another window.`);
+            this.scheduleFollowerRetry();
+            return;
+        }
+        this.ownsLease = true;
+        this.clearFollowerRetry();
+        this.spawnChild();
     }
 
     private spawnChild(): void {
         const node = this.opts.nodePath || 'node';
-        this.setStatus('waiting', 'Starting Codex app-server…');
+        if (this.ownsLease) {
+            this.lease.markState('starting');
+            this.startLeaseHeartbeat();
+        }
+        this.setStatus('waiting', `Starting ${this.agent} bridge...`);
 
         let child: ChildProcess;
         try {
@@ -136,24 +160,32 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
         }
 
         this.child = child;
+        if (this.ownsLease && child.pid) {
+            this.lease.markBridgeStarted(child.pid);
+        }
         child.stdout?.on('data', (b: Buffer) => this.handleOutput(b.toString()));
         child.stderr?.on('data', (b: Buffer) => this.handleOutput(b.toString()));
 
         child.on('error', (err) => {
-            // e.g. `node` itself missing from PATH.
             this.markedUnsupported = true;
             this.setStatus('unsupported', `Could not run node: ${err.message}`);
         });
 
         child.on('exit', (code, signal) => {
             if (this.child !== child) {
-                return; // superseded by a newer child or an explicit stop()
+                return;
             }
             this.child = null;
-            if (!this.wantRunning) {
+            if (!this.wantRunning || this.stopping) {
+                this.stopLeaseHeartbeat();
+                this.releaseLease();
+                this.stopping = false;
+                this.setStatus('inactive', 'Disconnected.');
                 return;
             }
             if (this.markedUnsupported) {
+                this.stopLeaseHeartbeat();
+                this.releaseLease();
                 this.setStatus('unsupported', this.detail);
                 return;
             }
@@ -174,9 +206,11 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
                 const token = line.split('[[AW_STATUS]]')[1].trim().split(/\s+/)[0];
                 if (token === 'linked') {
                     this.restartAttempts = 0;
-                    this.setStatus('linked', `${this.agent} bridge linked — reacting to board events.`);
+                    this.setStatus('linked', `${this.agent} bridge linked - reacting to board events.`);
+                    this.renewLeaseHeartbeat('linked');
                 } else if (token === 'waiting') {
-                    this.setStatus('waiting', `${this.agent} bridge connecting…`);
+                    this.setStatus('waiting', `${this.agent} bridge connecting...`);
+                    this.renewLeaseHeartbeat('waiting');
                 } else if (token === 'unsupported') {
                     this.markedUnsupported = true;
                     this.setStatus('unsupported', `${this.agent} CLI is not installed or not on PATH.`);
@@ -184,10 +218,10 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
                 continue;
             }
 
-            // Optional per-script heuristic fallback in case the marker is missed.
             if (this.opts.linkedPattern && this.opts.linkedPattern.test(line)) {
                 this.restartAttempts = 0;
-                this.setStatus('linked', `${this.agent} bridge linked — reacting to board events.`);
+                this.setStatus('linked', `${this.agent} bridge linked - reacting to board events.`);
+                this.renewLeaseHeartbeat('linked');
             }
         }
     }
@@ -197,18 +231,101 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
             return;
         }
         if (this.restartAttempts >= MAX_RESTARTS) {
-            this.setStatus('stopped', `Codex bridge stopped after ${MAX_RESTARTS} failed restarts.`);
+            this.stopLeaseHeartbeat();
+            this.releaseLease();
+            this.setStatus('stopped', `${this.agent} bridge stopped after ${MAX_RESTARTS} failed restarts.`);
             return;
         }
         this.restartAttempts += 1;
         const delay = Math.min(RESTART_BASE_MS * 2 ** (this.restartAttempts - 1), RESTART_MAX_MS);
         this.setStatus('error', `${this.detail} Restarting in ${Math.round(delay / 1000)}s (attempt ${this.restartAttempts}/${MAX_RESTARTS}).`);
+        this.renewLeaseHeartbeat('restarting');
+        this.startLeaseHeartbeat();
         this.restartTimer = setTimeout(() => {
             this.restartTimer = null;
             if (this.wantRunning && !this.child) {
-                this.spawnChild();
+                if (this.ownsLease) {
+                    this.spawnChild();
+                } else {
+                    this.tryBecomeOwner();
+                }
             }
         }, delay);
+    }
+
+    private scheduleFollowerRetry(): void {
+        if (!this.wantRunning || this.leaseRetryTimer) {
+            return;
+        }
+        this.leaseRetryTimer = setTimeout(() => {
+            this.leaseRetryTimer = null;
+            if (this.wantRunning && !this.child) {
+                this.tryBecomeOwner();
+            }
+        }, FOLLOWER_RETRY_MS);
+    }
+
+    private clearFollowerRetry(): void {
+        if (this.leaseRetryTimer) {
+            clearTimeout(this.leaseRetryTimer);
+            this.leaseRetryTimer = null;
+        }
+    }
+
+    private startLeaseHeartbeat(): void {
+        if (!this.ownsLease || this.leaseHeartbeatTimer) {
+            return;
+        }
+        this.leaseHeartbeatTimer = setInterval(() => {
+            const status = this.currentLeaseStatus();
+            if (!status) {
+                this.stopLeaseHeartbeat();
+                return;
+            }
+            this.lease.renewHealthy(status);
+        }, LEASE_HEARTBEAT_MS);
+    }
+
+    private stopLeaseHeartbeat(): void {
+        if (this.leaseHeartbeatTimer) {
+            clearInterval(this.leaseHeartbeatTimer);
+            this.leaseHeartbeatTimer = null;
+        }
+    }
+
+    private renewLeaseHeartbeat(status: RuntimeLeaseStatus): void {
+        if (!this.ownsLease) {
+            return;
+        }
+        this.lease.renewHealthy(status);
+        this.startLeaseHeartbeat();
+    }
+
+    private currentLeaseStatus(): RuntimeLeaseStatus | null {
+        if (!this.ownsLease || !this.wantRunning) {
+            return null;
+        }
+        if (this.child) {
+            if (this._status === 'linked') {
+                return 'linked';
+            }
+            if (this._status === 'waiting') {
+                return 'waiting';
+            }
+            return 'starting';
+        }
+        if (this.restartTimer) {
+            return 'restarting';
+        }
+        return null;
+    }
+
+    private releaseLease(): void {
+        if (!this.ownsLease) {
+            return;
+        }
+        this.lease.releaseIfOwned();
+        this.ownsLease = false;
     }
 
     private setStatus(status: RuntimeStatus, detail: string): void {

@@ -21,6 +21,7 @@ export class Bridge {
     private readonly commandsPath: string;
     private readonly autonomyPath: string;
     private readonly lockPath: string;
+    private readonly lockLogPath: string;
     private readonly sessionsDir: string;
     private readonly sessionsIndexPath: string;
     private readonly repoRoot: string;
@@ -34,6 +35,7 @@ export class Bridge {
         this.commandsPath = path.join(this.coordDir, 'commands.json');
         this.autonomyPath = path.join(this.coordDir, 'autonomy.json');
         this.lockPath = path.join(this.coordDir, 'bridge.lock');
+        this.lockLogPath = path.join(this.coordDir, 'lock.log');
         this.sessionsDir = path.join(this.coordDir, 'sessions');
         this.sessionsIndexPath = path.join(this.sessionsDir, 'index.json');
         this.ensureStore();
@@ -42,7 +44,7 @@ export class Bridge {
     // ── Public API ────────────────────────────────────────────────────────────
 
     claim(agent: string, targets: string[], ttlMinutes: number, note: string): void {
-        this.withLock(() => {
+        this.withLock('claim', () => {
             const state = this.readClaims();
             this.pruneExpired(state);
             const normalised = targets.map(t => this.normalisePath(t));
@@ -75,7 +77,7 @@ export class Bridge {
     }
 
     release(agent: string, targets: string[], note: string): void {
-        this.withLock(() => {
+        this.withLock('release', () => {
             const state = this.readClaims();
             const normalised = targets.map(t => this.normalisePath(t));
             const before = state.claims.length;
@@ -92,14 +94,14 @@ export class Bridge {
     }
 
     post(agent: string, note: string): void {
-        this.withLock(() => {
+        this.withLock('post', () => {
             this.appendEvent({ type: 'post', agent, paths: [], message: note });
         });
     }
 
     postCommand(agent: string, note: string, targetAgent: string): string {
         const id = crypto.randomUUID();
-        this.withLock(() => {
+        this.withLock('postCommand', () => {
             const state = this.readCommands();
             state.commands.push({
                 id,
@@ -117,7 +119,7 @@ export class Bridge {
     }
 
     ack(agent: string, commandId: string, note: string): void {
-        this.withLock(() => {
+        this.withLock('ack', () => {
             const state = this.readCommands();
             const cmd = state.commands.find(c => c.id === commandId);
             if (!cmd) { throw new Error(`Unknown command id: ${commandId}`); }
@@ -140,7 +142,7 @@ export class Bridge {
     }
 
     resolve(agent: string, commandId: string, note: string): void {
-        this.withLock(() => {
+        this.withLock('resolve', () => {
             const state = this.readCommands();
             const cmd = state.commands.find(c => c.id === commandId);
             if (!cmd) { throw new Error(`Unknown command id: ${commandId}`); }
@@ -155,7 +157,7 @@ export class Bridge {
 
     clearAllCommands(agent: string, note: string): number {
         let resolved = 0;
-        this.withLock(() => {
+        this.withLock('clearAllCommands', () => {
             const state = this.readCommands();
             const now = new Date().toISOString();
             for (const cmd of state.commands) {
@@ -184,7 +186,7 @@ export class Bridge {
     startSession(agent: string, meta?: Record<string, unknown>): void {
         // P3: carry the selected roster in meta so the board (and any worker)
         // knows who is participating in this session.
-        this.withLock(() => {
+        this.withLock('startSession', () => {
             this.appendEvent({ type: 'post', agent, paths: [], message: 'SESSION_START', meta });
         });
     }
@@ -199,7 +201,7 @@ export class Bridge {
      */
     archiveAndReset(label?: string): SessionSummary | null {
         let summary: SessionSummary | null = null;
-        this.withLock(() => {
+        this.withLock('archiveAndReset', () => {
             const lines = this.readEventLines();
             const events = lines
                 .map(l => { try { return JSON.parse(l) as BoardEvent; } catch { return null; } })
@@ -264,7 +266,7 @@ export class Bridge {
     }
 
     clearExpired(): void {
-        this.withLock(() => {
+        this.withLock('clearExpired', () => {
             const state = this.readClaims();
             this.pruneExpired(state);
             this.writeClaims(state);
@@ -367,24 +369,67 @@ export class Bridge {
         try {
             const stat = fs.statSync(this.lockPath);
             if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+                this.logLock(`stale-remove pid=${process.pid} age_ms=${Math.round(Date.now() - stat.mtimeMs)} owner=${this.describeLockOwner()}`);
                 fs.unlinkSync(this.lockPath);
             }
         } catch { /* no lock file */ }
     }
 
-    private withLock(fn: () => void): void {
+    private withLock(operation: string, fn: () => void): void {
         const deadline = Date.now() + LOCK_TIMEOUT_MS;
+        const startedAt = Date.now();
         while (Date.now() < deadline) {
             try {
                 const fd = fs.openSync(this.lockPath, 'wx');
-                fs.closeSync(fd);
-                try { fn(); } finally { try { fs.unlinkSync(this.lockPath); } catch { /* ignore */ } }
+                const owner = {
+                    pid: process.pid,
+                    operation,
+                    acquired_at: new Date().toISOString(),
+                    repo_root: this.repoRoot,
+                };
+                try {
+                    fs.writeFileSync(fd, JSON.stringify(owner), 'utf8');
+                } catch {
+                    // Best-effort metadata only.
+                } finally {
+                    fs.closeSync(fd);
+                }
+                this.logLock(`acquire pid=${process.pid} op=${operation} wait_ms=${Date.now() - startedAt}`);
+                try { fn(); } finally {
+                    this.logLock(`release pid=${process.pid} op=${operation} hold_ms=${Date.now() - startedAt}`);
+                    try { fs.unlinkSync(this.lockPath); } catch { /* ignore */ }
+                }
                 return;
             } catch {
+                if (deadline - Date.now() <= LOCK_RETRY_MS) {
+                    const owner = this.describeLockOwner();
+                    this.logLock(`timeout pid=${process.pid} op=${operation} wait_ms=${Date.now() - startedAt} owner=${owner}`);
+                }
                 this.sleepSync(LOCK_RETRY_MS);
             }
         }
         throw new Error('Could not acquire coordination lock — timed out.');
+    }
+
+    private logLock(message: string): void {
+        try {
+            fs.appendFileSync(this.lockLogPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8');
+        } catch {
+            // Best-effort logging only.
+        }
+    }
+
+    private describeLockOwner(): string {
+        try {
+            const raw = fs.readFileSync(this.lockPath, 'utf8').trim();
+            if (!raw) {
+                return 'unknown-empty';
+            }
+            const parsed = JSON.parse(raw) as { pid?: number; operation?: string; acquired_at?: string };
+            return `pid=${parsed.pid ?? 'unknown'} op=${parsed.operation ?? 'unknown'} acquired_at=${parsed.acquired_at ?? 'unknown'}`;
+        } catch {
+            return 'unknown-unreadable';
+        }
     }
 
     private normalisePath(input: string): string {

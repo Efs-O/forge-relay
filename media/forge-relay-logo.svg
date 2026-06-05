@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#222b3f"/>
+      <stop offset="1" stop-color="#0e1320"/>
+    </linearGradient>
+    <linearGradient id="ember" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc15e"/>
+      <stop offset="1" stop-color="#ff7a18"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff8a3d" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff8a3d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- rounded-square app tile -->
+  <rect x="0" y="0" width="256" height="256" rx="58" fill="url(#bg)"/>
+  <rect x="1" y="1" width="254" height="254" rx="57" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+
+  <!-- soft ember glow behind the hub -->
+  <circle cx="128" cy="130" r="92" fill="url(#glow)"/>
+
+  <!-- relay links -->
+  <g stroke="#ff8a3d" stroke-opacity="0.75" stroke-width="5" stroke-linecap="round">
+    <line x1="128" y1="112" x2="128" y2="74"/>
+    <line x1="113" y1="139" x2="80" y2="166"/>
+    <line x1="143" y1="139" x2="176" y2="166"/>
+  </g>
+
+  <!-- relay signal dots in transit -->
+  <g fill="url(#ember)">
+    <circle cx="128" cy="93" r="4.5"/>
+    <circle cx="96.5" cy="152.5" r="4.5"/>
+    <circle cx="159.5" cy="152.5" r="4.5"/>
+  </g>
+
+  <!-- satellite agent nodes -->
+  <g fill="#e8eef9" stroke="#ff8a3d" stroke-width="3">
+    <circle cx="128" cy="60" r="13"/>
+    <circle cx="66" cy="180" r="13"/>
+    <circle cx="190" cy="180" r="13"/>
+  </g>
+
+  <!-- central coordination hub -->
+  <circle cx="128" cy="128" r="20" fill="url(#ember)"/>
+  <circle cx="128" cy="128" r="20" fill="none" stroke="#ffffff" stroke-opacity="0.25" stroke-width="2"/>
+</svg>

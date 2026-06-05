@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"N:/vs code apps/Agentwatch/scripts/board-monitor.js\" &"
+            "command": "node \"N:/vs code apps/forge-relay/scripts/board-monitor.js\" &"
           }
         ]
       }

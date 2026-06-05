@@ -42,13 +42,13 @@ export function getWebviewHtml(
           content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="${cssUri}">
-    <title>AgentWatch Board</title>
+    <title>Forge Relay Board</title>
 </head>
 <body>
     <div id="app">
         <header class="topbar">
             <div class="brand">
-                <h1>AgentWatch</h1>
+                <h1>Forge Relay</h1>
                 <p class="subtitle">Shared coordination session for Claude and Codex</p>
             </div>
             <div class="topbar-meta">
@@ -192,7 +192,7 @@ export function getWebviewHtml(
             <div class="roster-block">
                 <h3>Orchestrators</h3>
                 <label class="check-row"><input type="checkbox" id="roster-claude" checked> Claude</label>
-                <label class="check-row"><input type="checkbox" id="roster-codex" checked> Codex</label>
+                <label class="check-row"><input type="checkbox" id="roster-codex"> Codex</label>
             </div>
 
             <div class="mode-block" id="claude-mode-block">
@@ -213,7 +213,7 @@ export function getWebviewHtml(
                 <div class="prompt-head">
                     <h3>Codex</h3>
                 </div>
-                <p class="prompt-note">Codex starts automatically via the AgentWatch runtime bridge — no paste needed.</p>
+                <p class="prompt-note">Recommended: leave Codex unchecked. Codex coordinates through its own sidebar via the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code> — one process, no OAuth conflict. Checking it here makes Forge Relay spawn a <em>second</em> codex app-server, which can fight the sidebar over your single ChatGPT login and go unresponsive.</p>
             </div>
 
             <div class="modal-actions">

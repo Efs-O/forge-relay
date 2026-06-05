@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 //
-// AgentWatch Claude Mode B bridge (plan Part 2.2 / Phase P4).
+// Forge Relay Claude Mode B bridge (plan Part 2.2 / Phase P4).
 //
-// Runs a *headless* Claude Code session in streaming-JSON mode, reusing the
-// user's existing Claude Code auth (no separate API key — Decision #1). It tails
-// the AgentWatch board and, when a triggering event appears, injects it as the
-// next user turn on Claude's stdin. Claude responds using the AgentWatch MCP
-// tools (post/claim/etc.), which are attached via --mcp-config. This is the true
-// zero-nudge analog to the Codex app-server bridge.
+// Runs a headless Claude Code session in streaming-JSON mode, reusing the
+// user's existing Claude Code auth. It tails the Forge Relay board and, when a
+// triggering event appears, injects it as the next user turn on Claude's
+// stdin. Claude responds using the Forge Relay MCP tools, which are attached via
+// --mcp-config. This is the zero-nudge analog to the Codex app-server bridge.
 //
 // Status is reported to the supervising extension via `[[AW_STATUS]]` lines.
 
@@ -15,10 +14,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { teeToLogFile } = require('./bridgeLog');
 
-// Windows-safe CLI launcher — `claude` is a .cmd shim that Node cannot spawn
-// directly with shell:false. On win32 go through the shell (cmd.exe resolves the
-// .cmd via PATHEXT) with manual quoting; elsewhere keep the no-shell array spawn.
+// Windows-safe CLI launcher. `claude` is a .cmd shim that Node cannot spawn
+// directly with shell:false. On win32 go through the shell; elsewhere keep the
+// no-shell array spawn.
 function winQuote(arg) {
     const s = String(arg);
     if (s === '') { return '""'; }
@@ -45,6 +45,8 @@ function parseArgs(argv) {
         permissionMode: 'acceptEdits',
         model: '',
         claudeBin: 'claude',
+        debugKeepAliveMs: 0,
+        debugKeepAliveLogPayloads: false,
     };
     for (let i = 0; i < argv.length; i += 1) {
         const key = argv[i];
@@ -60,6 +62,8 @@ function parseArgs(argv) {
             case '--permission-mode': args.permissionMode = value; i += 1; break;
             case '--model': args.model = value; i += 1; break;
             case '--claude-bin': args.claudeBin = value; i += 1; break;
+            case '--debug-keep-alive-ms': args.debugKeepAliveMs = Number(value); i += 1; break;
+            case '--debug-keep-alive-log-payloads': args.debugKeepAliveLogPayloads = value !== 'false'; i += 1; break;
             default: throw new Error(`Unknown argument: ${key}`);
         }
     }
@@ -89,9 +93,7 @@ function summarizeEvent(event) {
 
 function shouldTrigger(event, agent, mode) {
     if (!event || typeof event !== 'object') { return false; }
-    // Never react to our own posts (avoids self-loops).
     if (event.agent && String(event.agent).toLowerCase() === agent) { return false; }
-    // Never react to session markers — they are lifecycle, not work.
     if (event.type === 'post' && /SESSION_(START|END)/.test(event.message || '')) {
         return false;
     }
@@ -103,10 +105,6 @@ function shouldTrigger(event, agent, mode) {
     if (event.type !== 'post') { return false; }
     if (mode === 'all') { return true; }
 
-    // Orchestrator default: react to the human operator (identified by exclusion
-    // — anyone who is not another orchestrator or a worker, since the board lets
-    // them pick any name) and to posts that mention us. Peer orchestrator posts
-    // are ignored unless they mention us, avoiding a Claude<->Codex ping-pong.
     const poster = String(event.agent || '').toLowerCase();
     const isOrchestrator = poster === 'claude' || poster === 'codex';
     const isWorker = poster.startsWith('worker:');
@@ -117,9 +115,10 @@ function shouldTrigger(event, agent, mode) {
 
 function buildUserMessage(event, agent) {
     const text = [
-        `A new AgentWatch board event may require action from ${agent}.`,
+        '[AW_TURN_TYPE: board-event]',
+        `A new Forge Relay board event may require action from ${agent}.`,
         'Review it and decide whether a board reply, claim, or command acknowledgement is needed.',
-        'Use the AgentWatch MCP tools (post, claim, release, board_check, get_status, ack_command, resolve_command) to respond.',
+        'Use the Forge Relay MCP tools (post, claim, release, board_check, get_status, ack_command, resolve_command) to respond.',
         'If no action is needed, reply briefly that you are standing by. Claim files before editing.',
         '',
         `Event summary: ${summarizeEvent(event)}`,
@@ -128,29 +127,60 @@ function buildUserMessage(event, agent) {
     return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } };
 }
 
+function buildKeepAliveMessage() {
+    const text = [
+        '[AW_TURN_TYPE: keep-alive]',
+        'This is a cache keep-alive maintenance turn.',
+        'Do not use tools.',
+        'Do not post to the board.',
+        'Do not inspect or edit files.',
+        'Do not emit natural-language prose.',
+        'If the CLI requires a reply, emit only the inert marker [AW_KEEPALIVE_OK].',
+    ].join('\n');
+    return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } };
+}
+
 const SYSTEM_PROMPT = [
-    "You are the 'claude' participant on the AgentWatch multi-agent coordination board.",
-    'Each user message delivers one board event. Act only when action is genuinely needed.',
-    'Always coordinate through the AgentWatch MCP tools: claim files before editing, post progress',
+    "You are the 'claude' participant on the Forge Relay multi-agent coordination board.",
+    'Each user message is either a board-event turn or a keep-alive turn.',
+    'For [AW_TURN_TYPE: board-event], act only when action is genuinely needed.',
+    'For [AW_TURN_TYPE: keep-alive], do nothing: no tools, no board traffic, no file inspection, no prose, and only [AW_KEEPALIVE_OK] if the CLI requires output.',
+    'Always coordinate through the Forge Relay MCP tools: claim files before editing, post progress',
     'and handoffs, and acknowledge STOP/PAUSE commands. Keep board posts to one concise ASCII line.',
     'Continue handling events until you receive a SESSION_END post.',
 ].join(' ');
 
 const ALLOWED_TOOLS = [
-    'mcp__agentwatch__board_check',
-    'mcp__agentwatch__get_status',
-    'mcp__agentwatch__post',
-    'mcp__agentwatch__claim',
-    'mcp__agentwatch__release',
-    'mcp__agentwatch__ack_command',
-    'mcp__agentwatch__resolve_command',
-    'mcp__agentwatch__dispatch_subagent',
-    'mcp__agentwatch__list_models',
+    'mcp__forgerelay__board_check',
+    'mcp__forgerelay__get_status',
+    'mcp__forgerelay__post',
+    'mcp__forgerelay__claim',
+    'mcp__forgerelay__release',
+    'mcp__forgerelay__ack_command',
+    'mcp__forgerelay__resolve_command',
+    'mcp__forgerelay__dispatch_subagent',
+    'mcp__forgerelay__list_models',
     'Read',
     'Edit',
     'Grep',
     'Glob',
 ].join(' ');
+
+function collectToolNames(value, out) {
+    if (!value || typeof value !== 'object') { return; }
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            collectToolNames(item, out);
+        }
+        return;
+    }
+    if (typeof value.name === 'string' && /tool/i.test(String(value.type || ''))) {
+        out.push(value.name);
+    }
+    for (const child of Object.values(value)) {
+        collectToolNames(child, out);
+    }
+}
 
 class ClaudeBridge {
     constructor(options) {
@@ -160,23 +190,24 @@ class ClaudeBridge {
         this.processing = false;
         this.lastSize = 0;
         this.lastTriggerAt = 0;
+        this.lastActivityAt = 0;
+        this.hasSeenRealTurn = false;
         this.linked = false;
+        this.currentTurn = null;
     }
 
     start() {
+        this.lastActivityAt = Date.now();
         this.#spawnClaude();
         this.#primeCursor();
         this.#watchLoop();
     }
 
     #spawnClaude() {
-        // Write the MCP config to a temp file rather than passing inline JSON —
-        // inline JSON through a Windows shell is a quoting minefield; a file path
-        // is robust on every platform. claude --mcp-config accepts a file path.
         const mcpConfig = JSON.stringify({
-            mcpServers: { agentwatch: { type: 'sse', url: this.options.mcpUrl } },
+            mcpServers: { forgerelay: { type: 'sse', url: this.options.mcpUrl } },
         });
-        const mcpConfigPath = path.join(os.tmpdir(), `agentwatch-mcp-${process.pid}.json`);
+        const mcpConfigPath = path.join(os.tmpdir(), `forgerelay-mcp-${process.pid}.json`);
         try { fs.writeFileSync(mcpConfigPath, mcpConfig, 'utf8'); } catch { /* fall back to inline below */ }
         const mcpArg = fs.existsSync(mcpConfigPath) ? mcpConfigPath : mcpConfig;
 
@@ -225,19 +256,23 @@ class ClaudeBridge {
 
     #handleClaudeLine(line) {
         if (!this.linked) {
-            // The first structured line means the session is up and initialized.
             this.linked = true;
             emitStatus('linked');
         }
         let msg;
         try { msg = JSON.parse(line); } catch { return; }
+        this.#logKeepAlivePayload(msg);
 
         if (msg.type === 'result') {
-            // Turn finished — free the queue for the next event.
             if (typeof msg.result === 'string' && msg.result.trim()) {
                 process.stdout.write(`claude result: ${msg.result.trim()}\n`);
             }
+            if (this.currentTurn && this.currentTurn.kind === 'keep-alive') {
+                process.stdout.write(`claude keep-alive result payload: ${JSON.stringify(msg)}\n`);
+            }
             this.processing = false;
+            this.currentTurn = null;
+            this.lastActivityAt = Date.now();
         }
     }
 
@@ -255,6 +290,7 @@ class ClaudeBridge {
         for (;;) {
             try {
                 this.#scanEvents();
+                this.#maybeQueueDebugKeepAlive();
                 this.#flushQueue();
             } catch (error) {
                 process.stderr.write(`watch loop error: ${error.message}\n`);
@@ -266,7 +302,7 @@ class ClaudeBridge {
     #scanEvents() {
         if (!fs.existsSync(this.options.eventPath)) { return; }
         const stat = fs.statSync(this.options.eventPath);
-        if (stat.size < this.lastSize) { this.lastSize = stat.size; return; } // rotated/truncated
+        if (stat.size < this.lastSize) { this.lastSize = stat.size; return; }
         if (stat.size === this.lastSize) { return; }
 
         const fd = fs.openSync(this.options.eventPath, 'r');
@@ -281,7 +317,7 @@ class ClaudeBridge {
                 let event;
                 try { event = JSON.parse(trimmed); } catch { continue; }
                 if (shouldTrigger(event, this.options.agent, this.options.mode)) {
-                    this.queue.push(event);
+                    this.queue.push({ kind: 'board-event', event });
                 }
             }
         } finally {
@@ -289,26 +325,58 @@ class ClaudeBridge {
         }
     }
 
+    #maybeQueueDebugKeepAlive() {
+        if (!this.options.debugKeepAliveMs || this.options.debugKeepAliveMs <= 0) { return; }
+        if (!this.hasSeenRealTurn || this.processing) { return; }
+        if (this.queue.some((item) => item.kind === 'keep-alive')) { return; }
+        if (Date.now() - this.lastActivityAt < this.options.debugKeepAliveMs) { return; }
+        this.queue.push({ kind: 'keep-alive', reason: 'debug-idle-threshold' });
+        this.lastActivityAt = Date.now();
+        process.stdout.write(`queued debug keep-alive after ${this.options.debugKeepAliveMs}ms idle\n`);
+    }
+
     #flushQueue() {
         if (this.processing || this.queue.length === 0) { return; }
         if (Date.now() - this.lastTriggerAt < this.options.cooldownMs) { return; }
         if (!this.child || !this.child.stdin.writable) { return; }
 
-        const event = this.queue.shift();
+        const turn = this.queue.shift();
         this.processing = true;
         this.lastTriggerAt = Date.now();
-        process.stdout.write(`forwarding event to claude: ${summarizeEvent(event)}\n`);
+        this.currentTurn = turn;
         try {
-            this.child.stdin.write(JSON.stringify(buildUserMessage(event, this.options.agent)) + '\n');
+            if (turn.kind === 'keep-alive') {
+                process.stdout.write('forwarding debug keep-alive turn to claude\n');
+                this.child.stdin.write(JSON.stringify(buildKeepAliveMessage()) + '\n');
+            } else {
+                this.hasSeenRealTurn = true;
+                process.stdout.write(`forwarding event to claude: ${summarizeEvent(turn.event)}\n`);
+                this.child.stdin.write(JSON.stringify(buildUserMessage(turn.event, this.options.agent)) + '\n');
+            }
+            this.lastActivityAt = Date.now();
         } catch (error) {
             process.stderr.write(`failed to send turn to claude: ${error.message}\n`);
             this.processing = false;
+            this.currentTurn = null;
         }
+    }
+
+    #logKeepAlivePayload(msg) {
+        if (!this.currentTurn || this.currentTurn.kind !== 'keep-alive' || !this.options.debugKeepAliveLogPayloads) {
+            return;
+        }
+        const tools = [];
+        collectToolNames(msg, tools);
+        if (tools.length > 0) {
+            process.stdout.write(`claude keep-alive tool activity: ${tools.join(', ')}\n`);
+        }
+        process.stdout.write(`claude keep-alive stream payload: ${JSON.stringify(msg)}\n`);
     }
 }
 
 async function main() {
     const options = parseArgs(process.argv.slice(2));
+    teeToLogFile(options.eventPath, 'claude-bridge.log', 'claude');
     emitStatus('waiting');
     const bridge = new ClaudeBridge(options);
 
@@ -325,6 +393,5 @@ if (require.main === module) {
         process.exit(1);
     });
 } else {
-    // Exported for unit tests.
-    module.exports = { parseArgs, shouldTrigger, buildUserMessage, summarizeEvent };
+    module.exports = { parseArgs, shouldTrigger, buildUserMessage, buildKeepAliveMessage, summarizeEvent, collectToolNames };
 }

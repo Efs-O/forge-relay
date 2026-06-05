@@ -327,6 +327,22 @@ body {
     user-select: text;
 }
 
+.event-actions-inline {
+    margin-top: 6px;
+}
+
+.event-expand-button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--vscode-textLink-foreground);
+    cursor: pointer;
+}
+
+.event-expand-button:hover {
+    text-decoration: underline;
+}
+
 .event-copy-button {
     flex-shrink: 0;
 }

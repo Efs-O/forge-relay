@@ -1,5 +1,6 @@
 {
-  "agentwatch.subagentBridgeApiKey": "continue-local-change-me",
-  "agentwatch.subagentDirectUrl": "http://127.0.0.1:8080/v1",
-  "agentwatch.subagentOllamaUrl": "http://127.0.0.1:11434/v1"
+  "forgeRelay.subagentBridgeApiKey": "forge-local-change-me",
+  "forgeRelay.subagentDirectUrl": "http://127.0.0.1:8080/v1",
+  "forgeRelay.subagentOllamaUrl": "http://127.0.0.1:11434/v1",
+  "chatgpt.openOnStartup": false
 }

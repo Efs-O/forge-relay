@@ -4,7 +4,7 @@ import { Bridge } from './bridge';
  * Local/cloud model backends a subagent can target. All three speak the
  * OpenAI-compatible `/v1/chat/completions` API (llama.cpp, the continue
  * llamacpp bridge, and Ollama's OpenAI-compat endpoint), so one client covers
- * them. AgentWatch reads Forge's config only for the *model list*; at runtime it
+ * them. Forge Relay reads Forge's config only for the *model list*; at runtime it
  * just needs one of these endpoints up (Decision #4, decoupled).
  */
 export interface SubagentBackends {
@@ -39,7 +39,7 @@ export type SubagentRunMode = 'sync' | 'async';
 export interface DispatchOptions {
     /** The orchestrator dispatching the worker (claude/codex). */
     dispatcher: string;
-    /** Model id, optionally backend-prefixed: "ollama:qwen2.5-coder", "bridge:gemma", "direct:foo". */
+    /** Plain Forge-exposed model id, or an explicit route override like "bridge:foo". */
     model: string;
     task: string;
     context?: string;
@@ -57,6 +57,15 @@ export interface ResolvedModel {
     model: string;
     baseUrl: string;
     apiKey?: string;
+}
+
+export interface CatalogModelEntry {
+    name: string;
+    canonical: string;
+    routeFamily: 'forge-control' | 'forge-bridge' | 'raw-bridge' | 'raw-ollama' | 'raw-direct';
+    backend?: string;
+    provider?: string;
+    loaded?: boolean;
 }
 
 /** Resolve a (possibly prefixed) model id to a concrete backend + endpoint. */
@@ -80,6 +89,16 @@ export function resolveModel(model: string, backends: SubagentBackends): Resolve
         baseUrl,
         apiKey: backend === 'bridge' ? backends.bridgeApiKey : undefined,
     };
+}
+
+function modelName(model: string): string {
+    const sep = model.indexOf(':');
+    return sep === -1 ? model : model.slice(sep + 1);
+}
+
+function modelPrefix(model: string): string | null {
+    const sep = model.indexOf(':');
+    return sep === -1 ? null : model.slice(0, sep).toLowerCase();
 }
 
 /**
@@ -248,8 +267,42 @@ export async function chatCompletionRaw(
 
 const PROBE_TIMEOUT_MS = 4_000;
 
-/** GET a backend's /models and return the served model ids (OpenAI or Ollama shape). */
-async function fetchModels(baseUrl: string, backend: string, apiKey?: string): Promise<string[]> {
+function canonicalForSource(source: 'forge-control' | 'forge-bridge' | 'bridge' | 'ollama' | 'direct', name: string): string {
+    switch (source) {
+        case 'forge-control': return `forge:${name}`;
+        case 'forge-bridge': return `bridge:${name}`;
+        case 'ollama': return `ollama:${name}`;
+        case 'direct': return `direct:${name}`;
+        default: return `bridge:${name}`;
+    }
+}
+
+function routeFamilyForSource(source: 'forge-control' | 'forge-bridge' | 'bridge' | 'ollama' | 'direct'): CatalogModelEntry['routeFamily'] {
+    switch (source) {
+        case 'forge-control': return 'forge-control';
+        case 'forge-bridge': return 'forge-bridge';
+        case 'ollama': return 'raw-ollama';
+        case 'direct': return 'raw-direct';
+        default: return 'raw-bridge';
+    }
+}
+
+function uniqueEntries(entries: CatalogModelEntry[]): CatalogModelEntry[] {
+    const seen = new Set<string>();
+    return entries.filter((entry) => {
+        const key = `${entry.canonical}::${entry.provider ?? ''}::${entry.backend ?? ''}`;
+        if (seen.has(key)) { return false; }
+        seen.add(key);
+        return true;
+    });
+}
+
+/** GET a backend's /models and return catalog entries from either OpenAI or Forge shape. */
+async function fetchModelCatalog(
+    baseUrl: string,
+    backend: 'forge-control' | 'forge-bridge' | 'bridge' | 'ollama' | 'direct',
+    apiKey?: string,
+): Promise<CatalogModelEntry[]> {
     const url = `${baseUrl.replace(/\/$/, '')}/models`;
     const headers: Record<string, string> = {};
     if (apiKey) { headers['Authorization'] = `Bearer ${apiKey}`; }
@@ -263,10 +316,37 @@ async function fetchModels(baseUrl: string, backend: string, apiKey?: string): P
     if (!res.ok) {
         throw new Error(`${backend} backend HTTP ${res.status} at ${url}`);
     }
-    const data = await res.json().catch(() => ({})) as { data?: Array<{ id?: string }>; models?: Array<{ name?: string }> };
-    const ids = (data.data ?? []).map(m => m.id).filter((x): x is string => Boolean(x));
-    if (ids.length) { return ids; }
-    return (data.models ?? []).map(m => m.name).filter((x): x is string => Boolean(x));
+    const data = await res.json().catch(() => ({})) as {
+        data?: Array<{ id?: string; provider?: string; owned_by?: string; backend?: string }>;
+        models?: Array<{ name?: string; provider?: string; backend?: string; loaded?: boolean }>;
+    };
+    const forgeModels = (data.models ?? [])
+        .filter((m): m is { name: string; provider?: string; backend?: string; loaded?: boolean } => typeof m.name === 'string' && m.name.length > 0)
+        .map((m) => ({
+            name: m.name,
+            canonical: canonicalForSource(backend, m.name),
+            routeFamily: routeFamilyForSource(backend),
+            backend: m.backend,
+            provider: m.provider,
+            loaded: m.loaded,
+        }));
+    if (forgeModels.length) { return uniqueEntries(forgeModels); }
+
+    const openAiModels = (data.data ?? [])
+        .filter((m): m is { id: string; provider?: string; owned_by?: string; backend?: string } => typeof m.id === 'string' && m.id.length > 0)
+        .map((m) => ({
+            name: m.id,
+            canonical: canonicalForSource(backend, m.id),
+            routeFamily: routeFamilyForSource(backend),
+            backend: m.backend,
+            provider: m.provider ?? m.owned_by,
+        }));
+    return uniqueEntries(openAiModels);
+}
+
+/** GET a backend's /models and return the served model ids (OpenAI or Ollama shape). */
+async function fetchModels(baseUrl: string, backend: string, apiKey?: string): Promise<string[]> {
+    return (await fetchModelCatalog(baseUrl, backend as 'forge-control' | 'forge-bridge' | 'bridge' | 'ollama' | 'direct', apiKey)).map(m => m.name);
 }
 
 export interface BackendModels {
@@ -274,6 +354,14 @@ export interface BackendModels {
     baseUrl: string;
     ok: boolean;
     models?: string[];
+    error?: string;
+}
+
+export interface ForgeCatalogProbe {
+    backend: 'forge-control' | 'forge-bridge';
+    baseUrl: string;
+    ok: boolean;
+    models?: CatalogModelEntry[];
     error?: string;
 }
 
@@ -299,6 +387,119 @@ export async function listModels(backends: SubagentBackends): Promise<BackendMod
             return { backend: t.backend, baseUrl: t.baseUrl, ok: false, error: err instanceof Error ? err.message : String(err) };
         }
     }));
+}
+
+/** Probe Forge control plus the Forge bridge to build the normal merged catalog. */
+export async function fetchForgeCatalog(backends: SubagentBackends): Promise<{ control: ForgeCatalogProbe; bridge: ForgeCatalogProbe }> {
+    const controlUrl = backends.forgeControlUrl;
+    const control = !controlUrl
+        ? { backend: 'forge-control' as const, baseUrl: '', ok: false, error: 'Forge control route is off (forgeRelay.subagentForgeControlUrl is unset).' }
+        : await (async (): Promise<ForgeCatalogProbe> => {
+            try {
+                return {
+                    backend: 'forge-control',
+                    baseUrl: controlUrl,
+                    ok: true,
+                    models: await fetchModelCatalog(controlUrl, 'forge-control'),
+                };
+            } catch (err) {
+                return {
+                    backend: 'forge-control',
+                    baseUrl: controlUrl,
+                    ok: false,
+                    error: err instanceof Error ? err.message : String(err),
+                };
+            }
+        })();
+
+    const bridge = await (async (): Promise<ForgeCatalogProbe> => {
+        try {
+            return {
+                backend: 'forge-bridge',
+                baseUrl: backends.bridgeUrl,
+                ok: true,
+                models: await fetchModelCatalog(backends.bridgeUrl, 'forge-bridge', backends.bridgeApiKey),
+            };
+        } catch (err) {
+            return {
+                backend: 'forge-bridge',
+                baseUrl: backends.bridgeUrl,
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+            };
+        }
+    })();
+
+    return { control, bridge };
+}
+
+export type DispatchRouteDecision =
+    | { kind: 'forge-control'; model: string; canonical: string; note?: string }
+    | { kind: 'resolved'; resolved: ResolvedModel; canonical: string; note?: string }
+    | { kind: 'error'; message: string };
+
+function formatCatalogEntry(entry: CatalogModelEntry): string {
+    const meta: string[] = [];
+    if (entry.provider) { meta.push(`provider ${entry.provider}`); }
+    if (entry.backend) { meta.push(`backend ${entry.backend}`); }
+    if (entry.loaded !== undefined) { meta.push(entry.loaded ? 'loaded' : 'not loaded'); }
+    return meta.length ? `${entry.canonical} (${meta.join(', ')})` : entry.canonical;
+}
+
+export function decideForgeRoute(
+    model: string,
+    backends: SubagentBackends,
+    catalog: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe },
+): DispatchRouteDecision {
+    const prefix = modelPrefix(model);
+    const name = modelName(model).trim();
+    if (!name) { return { kind: 'error', message: 'worker model id is empty.' }; }
+
+    if (prefix === 'bridge' || prefix === 'ollama' || prefix === 'direct') {
+        return { kind: 'resolved', resolved: resolveModel(model, backends), canonical: `${prefix}:${name}` };
+    }
+    if (prefix === 'forge') {
+        if (!backends.forgeControlUrl) {
+            return { kind: 'error', message: '"forge:" routing requested but no forgeControlUrl is configured (set forgeRelay.subagentForgeControlUrl / FORGERELAY_FORGE_CONTROL_URL).' };
+        }
+        return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
+    }
+    if (!backends.forgeControlUrl) {
+        return { kind: 'resolved', resolved: resolveModel(model, backends), canonical: `${backends.defaultBackend}:${name}` };
+    }
+
+    const controlMatches = (catalog.control.models ?? []).filter(entry => entry.name === name);
+    if (controlMatches.length > 0) {
+        return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
+    }
+
+    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === name));
+    if (bridgeMatches.length === 1) {
+        return {
+            kind: 'resolved',
+            resolved: {
+                backend: 'bridge',
+                model: name,
+                baseUrl: backends.bridgeUrl,
+                apiKey: backends.bridgeApiKey,
+            },
+            canonical: bridgeMatches[0].canonical,
+            note: ' (via Forge bridge)',
+        };
+    }
+    if (bridgeMatches.length > 1) {
+        const options = bridgeMatches.map(formatCatalogEntry).join('; ');
+        return {
+            kind: 'error',
+            message: `model "${name}" is ambiguous in the Forge bridge catalog. Retry with an explicit target. Valid options: ${options}`,
+        };
+    }
+
+    const details: string[] = [];
+    if (!catalog.control.ok) { details.push(`Forge control catalog unavailable: ${catalog.control.error}`); }
+    if (!catalog.bridge.ok) { details.push(`Forge bridge catalog unavailable: ${catalog.bridge.error}`); }
+    const suffix = details.length ? ` ${details.join(' | ')}` : ' Run list_models to inspect the Forge-exposed catalog.';
+    return { kind: 'error', message: `model "${name}" was not found in the Forge control or Forge bridge catalogs.${suffix}` };
 }
 
 /** Check whether the resolved backend is reachable (connection-level) before dispatch. */
@@ -425,6 +626,45 @@ export async function forgeHealthz(controlUrl: string): Promise<boolean> {
 
 /** Human-readable model menu for the list_models tool. */
 export async function handleListModels(backends: SubagentBackends): Promise<string> {
+    if (backends.forgeControlUrl) {
+        const { control, bridge } = await fetchForgeCatalog(backends);
+        const controlNames = new Set((control.models ?? []).map(m => m.name));
+        const bridgeModels = (bridge.models ?? []).filter(m => !controlNames.has(m.name));
+
+        const controlBlock = control.ok
+            ? (control.models?.length
+                ? control.models
+                    .slice()
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(m => `  ${m.name} -> ${formatCatalogEntry(m)}`)
+                    .join('\n')
+                : '  (reachable, but no local Forge control models reported)')
+            : `  DOWN: ${control.error}`;
+        const bridgeBlock = bridge.ok
+            ? (bridgeModels.length
+                ? bridgeModels
+                    .slice()
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(m => `  ${m.name} -> ${formatCatalogEntry(m)}`)
+                    .join('\n')
+                : '  (reachable, but no Forge bridge-only models reported)')
+            : `  DOWN: ${bridge.error}`;
+
+        return [
+            'AVAILABLE WORKER MODELS - normal dispatch accepts the plain model name shown below.',
+            '',
+            'FORGE CONTROL (local GGUF, preferred when a model is local):',
+            controlBlock,
+            '',
+            'FORGE BRIDGE (provider-backed models and any Forge-exposed non-local route):',
+            bridgeBlock,
+            '',
+            'DEBUG OVERRIDES:',
+            '  Explicit route prefixes still work: forge:<model>, bridge:<model>, ollama:<model>, direct:<model>.',
+            '  Unprefixed ids resolve through the Forge-exposed catalogs first; there is no silent raw fallback.',
+        ].join('\n');
+    }
+
     const results = await listModels(backends);
     const blocks = results.map(r => {
         if (!r.ok) { return `${r.backend} @ ${r.baseUrl} — DOWN: ${r.error}`; }
@@ -442,9 +682,9 @@ export async function handleListModels(backends: SubagentBackends): Promise<stri
 export const LIST_MODELS_TOOL = {
     name: 'list_models',
     description:
-        'List worker models available across the local backends (bridge :9099, ollama :11434, direct llama-server :8080). '
-        + 'Use it to discover what you can pass to dispatch_subagent (as "<backend>:<model>") and to route multi-model jobs. '
-        + 'Backends that are down are reported so you can pick a live one.',
+        'List worker models available to Forge Relay. '
+        + 'When the Forge route is enabled, this returns a merged Forge-first catalog for normal dispatch by plain model name, plus explicit override forms for debugging. '
+        + 'When the Forge route is off, it falls back to the raw backend model menus.',
     inputSchema: {
         type: 'object',
         properties: { agent: { type: 'string', description: 'Your agent identity.' } },
@@ -457,10 +697,23 @@ const TIER1_SYSTEM_PROMPT = [
     'You have no file or tool access in this mode — reason from the task and any provided context only.',
 ].join(' ');
 
-function workerAgentName(model: string): string {
-    // Keep it board-friendly: worker:<model-without-backend-prefix>
+const WORKER_POST_MAX_CHARS = 8 * 1024;
+let workerOrdinal = 0;
+
+export function nextWorkerOrdinal(): number {
+    workerOrdinal += 1;
+    return workerOrdinal;
+}
+
+function workerAgentName(model: string, ordinal?: number): string {
+    // Keep it board-friendly: worker-N:<model-without-backend-prefix>
     const bare = model.includes(':') ? model.slice(model.indexOf(':') + 1) : model;
-    return `worker:${bare}`.slice(0, 60);
+    const prefix = ordinal ? `worker-${ordinal}:` : 'worker:';
+    return `${prefix}${bare}`.slice(0, 60);
+}
+
+export function formatWorkerPost(text: string): string {
+    return oneLine(text).slice(0, WORKER_POST_MAX_CHARS);
 }
 
 export interface DispatchResult {
@@ -482,10 +735,10 @@ export async function dispatchSubagentTier1(
     resolvedOverride?: ResolvedModel,
 ): Promise<DispatchResult> {
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const worker = workerAgentName(opts.model);
+    const worker = workerAgentName(opts.model, nextWorkerOrdinal());
     const resolved = resolvedOverride ?? resolveModel(opts.model, backends);
 
-    bridge.post(worker, `started [${subagentId.slice(0, 10)}] (${resolved.backend}:${resolved.model}): ${opts.task}`.slice(0, 300));
+    bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] (${resolved.backend}:${resolved.model}): ${opts.task}`));
 
     const messages: ChatMessage[] = [
         { role: 'system', content: TIER1_SYSTEM_PROMPT },
@@ -494,11 +747,11 @@ export async function dispatchSubagentTier1(
 
     try {
         const result = await chatCompletion(resolved, messages);
-        bridge.post(worker, `done [${subagentId.slice(0, 10)}]: ${oneLine(result)}`.slice(0, 300));
+        bridge.post(worker, formatWorkerPost(`done [${subagentId.slice(0, 10)}]: ${result}`));
         return { subagentId, status: 'completed', result };
     } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
-        bridge.post(worker, `error [${subagentId.slice(0, 10)}]: ${oneLine(error)}`.slice(0, 300));
+        bridge.post(worker, formatWorkerPost(`error [${subagentId.slice(0, 10)}]: ${error}`));
         return { subagentId, status: 'error', error };
     }
 }
@@ -513,15 +766,15 @@ export const DISPATCH_SUBAGENT_TOOL = {
     name: 'dispatch_subagent',
     description:
         'Delegate a self-contained task to a local model worker (Forge/Ollama/llama.cpp), like a Task subagent. '
-        + 'Returns the worker result and posts its lifecycle to the AgentWatch board as worker:<model>. '
-        + 'model may be backend-prefixed: "ollama:qwen2.5-coder", "bridge:gemma", "direct:foo", or "forge:<model>" (use list_models to discover what is available). '
-        + 'When the Forge route is enabled, unprefixed (or "forge:") ids are loaded on demand by Forge and dispatched only once the model is warm. '
+        + 'Returns the worker result and posts its lifecycle to the Forge Relay board as worker:<model>. '
+        + 'Pass a plain Forge-exposed model name for normal routing, or an explicit override such as "forge:<model>", "bridge:<model>", "ollama:<model>", or "direct:<model>" for debugging. '
+        + 'When the Forge route is enabled, unprefixed ids resolve through the Forge-exposed catalogs first: local models go through Forge control and provider-backed models go through the Forge bridge. '
         + 'tools: "none" = reasoning-only single completion; "readonly" = read/search + propose_diff (no writes); "full" = read/write/edit/run, bounded by the destructive-command denylist and the board autonomy mode.',
     inputSchema: {
         type: 'object',
         properties: {
             agent: { type: 'string', description: 'Your agent identity dispatching the worker (claude, codex).' },
-            model: { type: 'string', description: 'Worker model id, optionally backend-prefixed.' },
+            model: { type: 'string', description: 'Worker model id. Prefer a plain Forge-exposed name; raw prefixes are explicit overrides.' },
             task: { type: 'string', description: 'The self-contained instruction for the worker.' },
             context: { type: 'string', description: 'Optional inline context for the worker.' },
             tools: { type: 'string', enum: ['none', 'readonly', 'full'], description: 'Worker capability tier: none=reasoning only; readonly=read+propose_diff; full=read/write/edit/run.' },

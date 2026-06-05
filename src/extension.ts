@@ -15,16 +15,16 @@ import { BoardEvent, ClaudeMode, SessionRoster } from './types';
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
 
-const ROSTER_KEY = 'agentwatch.sessionRoster';
+const ROSTER_KEY = 'forgeRelay.sessionRoster';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
     if (!workspaceRoot) {
-        vscode.window.showWarningMessage('AgentWatch: Open a workspace folder first.');
+        vscode.window.showWarningMessage('Forge Relay: Open a workspace folder first.');
         return;
     }
 
-    const config = vscode.workspace.getConfiguration('agentwatch');
+    const config = vscode.workspace.getConfiguration('forgeRelay');
     const desiredPort = config.get<number>('port', 7878);
     const coordPath = config.get<string>('coordinationPath', '').trim();
     const repoRoot = coordPath || workspaceRoot;
@@ -46,7 +46,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // collide on one fixed port. `port` is the actual bound port from here on.
         port = await mcpServer.start(desiredPort);
     } catch (err) {
-        vscode.window.showErrorMessage(`AgentWatch: Could not start MCP server (tried from port ${desiredPort}). ${err}`);
+        vscode.window.showErrorMessage(`Forge Relay: Could not start MCP server (tried from port ${desiredPort}). ${err}`);
         return;
     }
 
@@ -58,7 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // P2: supervised runtime bridges (Codex app-server wakeup, productized from
     // the old `npm run codex:auto`). The status bar item reflects the dot.
     const runtimeStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    runtimeStatusBar.command = 'agentwatch.toggleCodexBridge';
+    runtimeStatusBar.command = 'forgeRelay.toggleCodexBridge';
 
     runtimeManager = new RuntimeManager({
         codexScriptPath: path.join(context.extensionUri.fsPath, 'scripts', 'codex-auto-bridge.js'),
@@ -70,7 +70,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         nodePath: config.get<string>('nodePath', '').trim() || undefined,
         claudePermissionMode: config.get<string>('claudePermissionMode', 'acceptEdits').trim() || undefined,
         claudeModel: config.get<string>('claudeModel', '').trim() || undefined,
-        onLog: (line) => console.log('[agentwatch:bridge]', line),
+        onLog: (line) => console.log('[forgerelay:bridge]', line),
     });
     const rm = runtimeManager;
 
@@ -80,7 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const lead = snap.codex.status !== 'inactive' ? { name: 'Codex', ...snap.codex }
             : snap.claude.status !== 'inactive' ? { name: 'Claude', ...snap.claude }
             : { name: 'Codex', ...snap.codex };
-        runtimeStatusBar.text = `$(${statusBarIcon(lead.status)}) AgentWatch: ${lead.name} ${lead.status}`;
+        runtimeStatusBar.text = `$(${statusBarIcon(lead.status)}) Forge Relay: ${lead.name} ${lead.status}`;
         runtimeStatusBar.tooltip = `Codex bridge — ${snap.codex.detail}\nClaude bridge — ${snap.claude.detail}\nClick to ${rm.isAnyActive() ? 'disconnect Codex' : 'connect Codex'}.`;
         runtimeStatusBar.show();
     };
@@ -102,7 +102,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // after a window reload (survives restart, per P2/P3).
     const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode }>(ROSTER_KEY);
     if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex)) {
-        rm.setRoster(savedSession.roster, savedSession.claudeMode ?? 'A');
+        // Single-process codex policy: never auto-spawn a codex bridge on restore.
+        // A 2nd codex app-server fights the Codex sidebar over the one ChatGPT OAuth
+        // login (refresh_token_reused/token_revoked) and goes unresponsive. Codex
+        // coordinates through the forgerelay MCP server in its own ~/.codex/config.toml
+        // instead. The operator can still re-check Codex in the Connect modal per-session.
+        rm.setRoster({ ...savedSession.roster, codex: false }, savedSession.claudeMode ?? 'A');
     }
 
     context.subscriptions.push(
@@ -112,43 +117,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             { webviewOptions: { retainContextWhenHidden: true } }
         ),
 
-        vscode.commands.registerCommand('agentwatch.openBoard', () => {
+        vscode.commands.registerCommand('forgeRelay.openBoard', () => {
             BoardPanel.createOrShow(context.extensionUri, bridge, rm);
             BoardPanel.current?.updateMcpPort(mcpServer?.getPort() ?? port);
         }),
 
-        vscode.commands.registerCommand('agentwatch.stopAll', () => {
+        vscode.commands.registerCommand('forgeRelay.stopAll', () => {
             bridge.postCommand('user', 'STOP — operator halt', 'all');
-            vscode.window.showWarningMessage('AgentWatch: STOP posted to all agents.');
+            vscode.window.showWarningMessage('Forge Relay: STOP posted to all agents.');
         }),
 
-        vscode.commands.registerCommand('agentwatch.toggleClanker', () => {
+        vscode.commands.registerCommand('forgeRelay.toggleClanker', () => {
             const next = bridge.getAutonomyMode() === 'clanker' ? 'draft' : 'clanker';
             bridge.setAutonomyMode(next);
             vscode.window.showInformationMessage(next === 'clanker'
-                ? 'AgentWatch: 💥 Clanker Mode ON — workers may write/edit/run (destructive commands still blocked).'
-                : 'AgentWatch: Draft mode — workers are read-only and propose diffs for review.');
+                ? 'Forge Relay: 💥 Clanker Mode ON — workers may write/edit/run (destructive commands still blocked).'
+                : 'Forge Relay: Draft mode — workers are read-only and propose diffs for review.');
             boardViewProvider.postAutonomy(next);
             BoardPanel.current?.postAutonomy(next);
         }),
 
-        vscode.commands.registerCommand('agentwatch.toggleCodexBridge', () => {
+        vscode.commands.registerCommand('forgeRelay.toggleCodexBridge', () => {
             if (rm.getSnapshot().codex.status === 'inactive') {
                 rm.connectCodex();
-                vscode.window.setStatusBarMessage('AgentWatch: Codex runtime bridge connecting…', 4000);
+                vscode.window.setStatusBarMessage('Forge Relay: Codex runtime bridge connecting…', 4000);
             } else {
                 rm.disconnectCodex();
-                vscode.window.setStatusBarMessage('AgentWatch: Codex runtime bridge disconnected.', 4000);
+                vscode.window.setStatusBarMessage('Forge Relay: Codex runtime bridge disconnected.', 4000);
             }
         }),
 
-        vscode.commands.registerCommand('agentwatch.showMcpConfig', () => {
+        vscode.commands.registerCommand('forgeRelay.showMcpConfig', () => {
             const cfg = buildMcpConfig(context.extensionUri.fsPath, repoRoot, mcpServer?.getPort() ?? port);
             vscode.workspace.openTextDocument({ content: cfg, language: 'markdown' })
                 .then(doc => vscode.window.showTextDocument(doc));
         }),
 
-        vscode.commands.registerCommand('agentwatch.verifySetup', async () => {
+        vscode.commands.registerCommand('forgeRelay.verifySetup', async () => {
             const report = buildVerifySetupReport(context.extensionUri.fsPath, repoRoot, mcpServer?.getPort() ?? port);
             const doc = await vscode.workspace.openTextDocument({ content: report, language: 'markdown' });
             await vscode.window.showTextDocument(doc);
@@ -182,11 +187,11 @@ function handleBoardEvent(event: BoardEvent): void {
     if (isStop) {
         // Persistent warning — stays until dismissed
         vscode.window.showWarningMessage(
-            `AgentWatch STOP [${event.agent}]: ${event.message}`,
+            `Forge Relay STOP [${event.agent}]: ${event.message}`,
             'Open Board', 'Dismiss'
         ).then(action => {
             if (action === 'Open Board') {
-                vscode.commands.executeCommand('agentwatch.openBoard');
+                vscode.commands.executeCommand('forgeRelay.openBoard');
             }
         });
         return;
@@ -194,25 +199,25 @@ function handleBoardEvent(event: BoardEvent): void {
 
     if (isPause) {
         vscode.window.showWarningMessage(
-            `AgentWatch PAUSE [${event.agent}]: ${event.message}`,
+            `Forge Relay PAUSE [${event.agent}]: ${event.message}`,
             'Open Board'
         ).then(action => {
             if (action === 'Open Board') {
-                vscode.commands.executeCommand('agentwatch.openBoard');
+                vscode.commands.executeCommand('forgeRelay.openBoard');
             }
         });
         return;
     }
 
     if (isPost) {
-        // Keep board traffic inside AgentWatch instead of routing into whichever chat provider
+        // Keep board traffic inside Forge Relay instead of routing into whichever chat provider
         // VS Code considers active.
         vscode.window.showInformationMessage(
-            `AgentWatch [${event.agent}]: ${event.message}`,
+            `Forge Relay [${event.agent}]: ${event.message}`,
             'Open Board'
         ).then(action => {
             if (action === 'Open Board') {
-                vscode.commands.executeCommand('agentwatch.openBoard');
+                vscode.commands.executeCommand('forgeRelay.openBoard');
             }
         });
         return;
@@ -221,7 +226,7 @@ function handleBoardEvent(event: BoardEvent): void {
     if (isClaim) {
         // Subtle status bar hint for claims — not a full popup
         vscode.window.setStatusBarMessage(
-            `AgentWatch: ${event.agent} claimed ${event.paths.join(', ')}`,
+            `Forge Relay: ${event.agent} claimed ${event.paths.join(', ')}`,
             5000
         );
     }
@@ -233,6 +238,7 @@ function statusBarIcon(status: RuntimeStatus): string {
     switch (status) {
         case 'linked': return 'pass-filled';
         case 'waiting': return 'sync~spin';
+        case 'follower': return 'eye';
         case 'error': return 'warning';
         case 'unsupported': return 'circle-slash';
         case 'stopped': return 'error';
@@ -242,26 +248,25 @@ function statusBarIcon(status: RuntimeStatus): string {
 
 function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number): string {
     const stdioPath = getStdioPath(extensionPath);
-    const repoRootNormalized = toForwardSlashes(repoRoot);
     const claudePaths = getClaudeConfigPaths(repoRoot);
 
     return [
-        '# AgentWatch MCP Config',
+        '# Forge Relay MCP Config',
         '',
-        'AgentWatch no longer writes MCP config into the workspace or your home directory.',
+        'Forge Relay no longer writes MCP config into the workspace or your home directory.',
         'Paste one of the snippets below into the client config file you want to manage manually.',
         '',
-        '## What AgentWatch handles automatically',
+        '## What Forge Relay handles automatically',
         '',
         '- Ships extension-owned UI metadata such as icons and commands.',
-        '- Starts the local AgentWatch MCP server when VS Code opens the workspace.',
+        '- Starts the local Forge Relay MCP server when VS Code opens the workspace.',
         '- Includes repo-owned helper scripts such as `npm run codex:auto`.',
         '',
         '## What you still need to configure manually on each machine',
         '',
-        '- Add the AgentWatch MCP entry to Codex `config.toml`.',
-        '- Add the AgentWatch MCP entry to the Claude `settings.json` file you want to use.',
-        '- Run `AgentWatch: Verify Setup` after configuring both tools.',
+        '- Add the Forge Relay MCP entry to Codex `config.toml` without hardwiring `--repoRoot` in the global entry.',
+        '- Add the Forge Relay MCP entry to the Claude `settings.json` file you want to use.',
+        '- Run `Forge Relay: Verify Setup` after configuring both tools.',
         '',
         '## Verified config sources in this environment',
         '',
@@ -274,10 +279,13 @@ function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number
         `## Codex (\`${toForwardSlashes(getCodexConfigPath())}\`)`,
         '',
         '```toml',
-        '[mcp_servers.agentwatch]',
+        '[mcp_servers.forgerelay]',
         'command = "node"',
-        `args = ["${stdioPath}", "--repoRoot", "${repoRootNormalized}"]`,
+        `args = ["${stdioPath}"]`,
         '```',
+        '',
+        'Codex should resolve the board from the current workspace `cwd` by default.',
+        'Do not keep a single global `--repoRoot "n:/vs code apps/forge-relay"` style argument in this entry, or every Codex workspace will write to the same board.',
         '',
         '## Claude Code (`settings.json` file)',
         '',
@@ -286,7 +294,7 @@ function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number
         '```json',
         '{',
         '  "mcpServers": {',
-        '    "agentwatch": {',
+        '    "forgerelay": {',
         '      "type": "sse",',
         `      "url": "http://127.0.0.1:${mcpPort}/sse"`,
         '    }',
@@ -309,15 +317,16 @@ function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort
     const claudePaths = getClaudeConfigPaths(repoRoot);
     const nodeCheck = checkNodeRuntime();
     const stdioExists = fs.existsSync(stdioPath);
-    const codexConfig = inspectFile(codexConfigPath, hasCodexAgentwatchConfig);
-    const claudeUserConfig = inspectFile(claudePaths.user, hasClaudeAgentwatchConfig);
-    const claudeWorkspaceConfig = inspectFile(claudePaths.workspace, hasClaudeAgentwatchConfig);
-    const claudeWorkspaceLocalConfig = inspectFile(claudePaths.workspaceLocal, hasClaudeAgentwatchConfig);
+    const codexConfig = inspectFile(codexConfigPath, hasCodexForgeRelayConfig);
+    const codexHardwiredRepoRoot = inspectFile(codexConfigPath, hasCodexHardwiredRepoRoot);
+    const claudeUserConfig = inspectFile(claudePaths.user, hasClaudeForgeRelayConfig);
+    const claudeWorkspaceConfig = inspectFile(claudePaths.workspace, hasClaudeForgeRelayConfig);
+    const claudeWorkspaceLocalConfig = inspectFile(claudePaths.workspaceLocal, hasClaudeForgeRelayConfig);
     const anyClaudeConfigured = [claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig]
         .some(result => result.hasEntry);
 
     return [
-        '# AgentWatch Verify Setup',
+        '# Forge Relay Verify Setup',
         '',
         `Checked at: ${new Date().toISOString()}`,
         `Repo root: \`${toForwardSlashes(repoRoot)}\``,
@@ -327,8 +336,9 @@ function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort
         '',
         formatCheck('Node runtime available', nodeCheck.ok, nodeCheck.detail),
         formatCheck('Built MCP stdio bundle exists', stdioExists, toForwardSlashes(stdioPath)),
-        formatCheck('Codex config has `agentwatch` entry', codexConfig.hasEntry, describeInspection(codexConfig)),
-        formatCheck('At least one checked Claude settings file has `agentwatch` entry', anyClaudeConfigured, summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])),
+        formatCheck('Codex config has `forgerelay` entry', codexConfig.hasEntry, describeInspection(codexConfig)),
+        formatCheck('Codex config does not hardwire a global `--repoRoot`', !codexHardwiredRepoRoot.hasEntry, describeInspection(codexHardwiredRepoRoot)),
+        formatCheck('At least one checked Claude settings file has `forgerelay` entry', anyClaudeConfigured, summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])),
         '',
         '## Claude file inspection',
         '',
@@ -338,7 +348,7 @@ function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort
         '',
         '## Interpretation',
         '',
-        `- Codex config status: ${summarizeStatus(codexConfig)}.`,
+        `- Codex config status: ${summarizeStatus(codexConfig)}${codexHardwiredRepoRoot.hasEntry ? '; global --repoRoot should be removed' : ''}.`,
         `- Claude config status: ${summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])}.`,
         '- This command does not modify any config files.',
         '',
@@ -394,12 +404,16 @@ function inspectFile(filePath: string, matcher: (content: string) => boolean): {
     }
 }
 
-function hasCodexAgentwatchConfig(content: string): boolean {
-    return /\[mcp_servers\.agentwatch\]/i.test(content);
+function hasCodexForgeRelayConfig(content: string): boolean {
+    return /\[mcp_servers\.forgerelay\]/i.test(content);
 }
 
-function hasClaudeAgentwatchConfig(content: string): boolean {
-    return /"agentwatch"\s*:/i.test(content);
+function hasCodexHardwiredRepoRoot(content: string): boolean {
+    return /\[mcp_servers\.forgerelay\][\s\S]*?--repoRoot/i.test(content);
+}
+
+function hasClaudeForgeRelayConfig(content: string): boolean {
+    return /"forgerelay"\s*:/i.test(content);
 }
 
 function formatCheck(label: string, ok: boolean, detail: string): string {
@@ -419,7 +433,7 @@ function summarizeStatus(result: { exists: boolean; hasEntry: boolean }): string
         return 'configured';
     }
     if (result.exists) {
-        return 'file exists but agentwatch entry is missing';
+        return 'file exists but forgerelay entry is missing';
     }
     return 'config file missing';
 }
@@ -430,9 +444,9 @@ function summarizeClaudeStatus(results: Array<{ exists: boolean; hasEntry: boole
         return `configured in ${configured.map(result => `\`${toForwardSlashes(result.path)}\``).join(', ')}`;
     }
     if (results.some(result => result.exists)) {
-        return 'settings files exist but no agentwatch entry was found';
+        return 'settings files exist but no forgerelay entry was found';
     }
-    return 'no checked settings file currently contains an agentwatch entry';
+    return 'no checked settings file currently contains a forgerelay entry';
 }
 
 function toForwardSlashes(value: string): string {

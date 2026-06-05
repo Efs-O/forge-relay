@@ -2,133 +2,88 @@
 
 Read this before continuing work in this repository.
 
+> This is the canonical coordination prompt; [AGENTS.md](AGENTS.md) (auto-loaded by
+> the Codex extension) is kept in sync with it. Both agents coordinate through the
+> **Forge Relay MCP tools**, not the PowerShell scripts.
+
 ## Mission
 
-You are one of two coding agents (claude, codex) working in parallel on this repository.
-Coordinate through the AgentWatch board — do not collide on files or tasks.
+You are one of two coding agents (`claude`, `codex`) working in parallel on this
+repository. Coordinate through the **Forge Relay board** — do not collide on files
+or tasks.
+
+**Replace `<agent-name>` with your assigned identity (`codex` or `claude`) in every
+tool call below.**
 
 ## Repo Boundary
 
 Work only inside:
 
-- `N:\vs code apps\Agentwatch\`
+- `N:\vs code apps\forge-relay\`
 
-## Shared Coordination Channel
+## Coordination Channel — use the Forge Relay MCP tools
 
-The AgentWatch MCP server runs at `http://127.0.0.1:7878/`.
+Coordinate **exclusively through the Forge Relay MCP tools**, injected into your
+session as `forgerelay` MCP tools by the managed bridge. Do **not** run the
+PowerShell scripts in `scripts/` for coordination — they are a legacy human
+debugging CLI only.
 
-Board scripts are at `N:\vs code apps\Agentwatch\scripts\`.
+| Tool | Use it to |
+|---|---|
+| `board_check` | **Pre-flight.** Returns blocking status + new events. Run before any substantial edit, build, or long task. |
+| `get_status` | List all active claims and open operator commands. |
+| `claim` | Claim file(s)/folder(s) before editing them. |
+| `release` | Release a claim when that lane is done. |
+| `post` | Post a progress update, blocker, or handoff note. |
+| `ack_command` | Acknowledge an operator command (STOP / PAUSE). |
+| `resolve_command` | Mark an operator command as resolved. |
 
-**Replace `<agent-name>` with your assigned identity before proceeding.**
-
-Assigned identities:
-
-- `codex`
-- `claude`
-
-Before starting new work:
-
-1. Check board state (watcher or board_check MCP tool)
-2. Check active claims
-3. Check for blocking commands
-4. Post your intended scope if it changed
-5. Claim files or folders before editing
-
-If you post a question or handoff that requires the other agent to respond,
-wait for a board reply before proceeding on that dependency.
-Use polling waits up to 100 seconds when synchronization is required.
-
-## Required Tools
-
-Board and coordination scripts:
-
-```
-N:\vs code apps\Agentwatch\scripts\agent-bridge.ps1
-N:\vs code apps\Agentwatch\scripts\agent-watch.ps1
-```
+Every tool takes an `agent` argument — always pass your assigned identity.
 
 ## Session Startup
 
-1. Run the watcher once to check board state.
-2. Read recent events.
-3. Check active claims.
-4. Post your intended starting scope.
-5. Claim your first target.
+1. `board_check` with `agent="<agent-name>"`.
+2. If it returns `BLOCKED`, stop: `ack_command` the blocking id and do no further
+   work until an operator resolves it.
+3. `get_status` to see active claims and open commands.
+4. `post` your intended starting scope.
+5. `claim` your first target.
 6. Begin work.
-
-## Sync Wait Rule
-
-When you need an explicit response from the other agent:
-
-1. Post the question or handoff on the board.
-2. Poll the board for up to 100 seconds for a reply.
-3. If no reply arrives, post a follow-up or proceed only if non-blocking.
-
-## Loop Or Watch Rule
-
-When you need to monitor for a reply or coordination event:
-
-1. Use your available persistent loop or watch skill if the current runtime provides one.
-2. If no persistent loop or watch skill is available, simulate it by polling the AgentWatch board at a fixed interval.
-3. Use a bounded polling window of 60 seconds by default.
-4. Extend the polling window up to 100 seconds only when the dependency is explicit and synchronization is required.
-5. Use the board as the source of truth for waits and replies rather than inventing an ad hoc wait mechanism.
 
 ## Required Operating Rules
 
 1. Do not edit an unclaimed file or folder.
 2. Do not take work already claimed by the other agent.
-3. Run the watcher before substantial edits, builds, or long tasks.
-4. Post progress and blockers back to the board.
-5. Release claims when your lane is complete.
-6. Treat `STOP` or `PAUSE` on the board as mandatory.
+3. Run `board_check` before substantial edits, builds, or long tasks.
+4. Post progress and blockers back to the board with `post`.
+5. Release claims with `release` when your lane is complete.
+6. Treat any `STOP` or `PAUSE` returned by `board_check` as mandatory — `ack_command`
+   it and halt.
 
-## Watcher Rule
+## Claim / Reporting
 
-Run from the repo root:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "N:\vs code apps\Agentwatch\scripts\agent-watch.ps1" -Agent <agent-name>
+```
+claim   agent="<agent-name>" targets=["<repo-relative-path>"] note="<scope>"
+release agent="<agent-name>" targets=["<repo-relative-path>"]
+post    agent="<agent-name>" note="your message here"
 ```
 
-Interpretation:
+Note format: plain ASCII only, one line only, no emojis, no bullets.
 
-- exit `0`: continue
-- exit `2`: stop or pause work
+## Sync Wait Rule
 
-## Claim Rule
+When you need an explicit response from the other agent:
 
-Claim before editing:
+1. `post` the question or handoff.
+2. Poll with `board_check` / `get_status` for up to 100 seconds.
+3. If no reply, post a follow-up or proceed only if non-blocking.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "N:\vs code apps\Agentwatch\scripts\agent-bridge.ps1" claim -Agent <agent-name> -Target "<repo-relative-path>" -Note "<scope>"
-```
+## Debugging fallback (humans only)
 
-Release when done:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "N:\vs code apps\Agentwatch\scripts\agent-bridge.ps1" release -Agent <agent-name> -Target "<repo-relative-path>"
-```
-
-## Reporting Rule
-
-Post when starting, changing scope, finding a blocker, or finishing a lane.
-
-Format constraints: plain ASCII only, one line only, no emojis, no bullets.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "N:\vs code apps\Agentwatch\scripts\agent-bridge.ps1" post -Agent <agent-name> -Note "your message here"
-```
-
-## Conflict Avoidance
-
-If another agent holds a claim on a nearby area and your fix may overlap:
-
-1. Stop before editing.
-2. Post on the board.
-3. Ask whether they want to keep the fix or hand it off.
-
-If a claim attempt fails because another agent holds it, read the board first, then decide.
+The `scripts/*.ps1` files write the same `.coordination/*.json` board files
+directly and are retained as a manual operator/debugging CLI only. The real verbs
+are `-Action history` (recent events) and `-Action status` (active claims) — not
+`recent`/`claims`.
 
 ## This protocol is not optional.
 

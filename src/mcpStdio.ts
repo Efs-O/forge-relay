@@ -9,13 +9,13 @@ import { EventTail } from './eventTail';
 import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
 import { handleDispatchSubagent } from './subagentLoop';
 
-// repoRoot resolution order: AGENTWATCH_REPO_ROOT env wins, then --repoRoot, then
-// cwd. The codex/claude auto-bridge injects AGENTWATCH_REPO_ROOT with the actual
+// repoRoot resolution order: FORGERELAY_REPO_ROOT env wins, then --repoRoot, then
+// cwd. The codex/claude auto-bridge injects FORGERELAY_REPO_ROOT with the actual
 // workspace it is running in, which must override the --repoRoot baked into the
 // *global* ~/.codex/config.toml — otherwise every codex window posts to whichever
 // single repo that config names, instead of its own workspace board.
 const repoRootArg = process.argv.indexOf('--repoRoot');
-const repoRoot = process.env.AGENTWATCH_REPO_ROOT
+const repoRoot = process.env.FORGERELAY_REPO_ROOT
     || (repoRootArg !== -1 ? process.argv[repoRootArg + 1] : process.cwd());
 
 const bridge = new Bridge(repoRoot);
@@ -31,26 +31,40 @@ try {
     fs.appendFileSync(
         path.join(path.dirname(eventsPath), 'mcpstdio.log'),
         `[${new Date().toISOString()}] mcpStdio start pid=${process.pid} -> board=${eventsPath} `
-        + `(env AGENTWATCH_REPO_ROOT=${process.env.AGENTWATCH_REPO_ROOT || '(unset)'}, --repoRoot arg=${argRepo}, cwd=${process.cwd()})\n`,
+        + `(env FORGERELAY_REPO_ROOT=${process.env.FORGERELAY_REPO_ROOT || '(unset)'}, --repoRoot arg=${argRepo}, cwd=${process.cwd()})\n`,
     );
 } catch {
     // logging is best-effort; never block startup
+}
+
+// Per-call breadcrumb so we can finally answer "did Codex's model actually CALL
+// a tool, or only spawn the server?" (see docs/CODEX_MCP_VS_SCRIPTS_VERIFICATION.md
+// §2). Written to the same mcpstdio.log, never stdout (that's the JSON-RPC channel).
+function logToolCall(tool: string, agent: string): void {
+    try {
+        fs.appendFileSync(
+            path.join(path.dirname(eventsPath), 'mcpstdio.log'),
+            `[${new Date().toISOString()}] tool=${tool} agent=${agent || '(none)'} pid=${process.pid}\n`,
+        );
+    } catch {
+        // best-effort; never block a tool call on logging
+    }
 }
 
 // Subagent backends — defaults can be overridden via env vars so Codex (which
 // spawns this stdio server itself) can point at the same endpoints as the
 // extension without sharing VS Code settings.
 const subagentBackends: SubagentBackends = {
-    bridgeUrl: process.env.AGENTWATCH_BRIDGE_URL || DEFAULT_SUBAGENT_BACKENDS.bridgeUrl,
-    ollamaUrl: process.env.AGENTWATCH_OLLAMA_URL || DEFAULT_SUBAGENT_BACKENDS.ollamaUrl,
-    directUrl: process.env.AGENTWATCH_DIRECT_URL || DEFAULT_SUBAGENT_BACKENDS.directUrl,
-    bridgeApiKey: process.env.AGENTWATCH_BRIDGE_API_KEY || undefined,
-    defaultBackend: (process.env.AGENTWATCH_DEFAULT_BACKEND as SubagentBackends['defaultBackend']) || DEFAULT_SUBAGENT_BACKENDS.defaultBackend,
-    forgeControlUrl: process.env.AGENTWATCH_FORGE_CONTROL_URL || undefined,
+    bridgeUrl: process.env.FORGERELAY_BRIDGE_URL || DEFAULT_SUBAGENT_BACKENDS.bridgeUrl,
+    ollamaUrl: process.env.FORGERELAY_OLLAMA_URL || DEFAULT_SUBAGENT_BACKENDS.ollamaUrl,
+    directUrl: process.env.FORGERELAY_DIRECT_URL || DEFAULT_SUBAGENT_BACKENDS.directUrl,
+    bridgeApiKey: process.env.FORGERELAY_BRIDGE_API_KEY || undefined,
+    defaultBackend: (process.env.FORGERELAY_DEFAULT_BACKEND as SubagentBackends['defaultBackend']) || DEFAULT_SUBAGENT_BACKENDS.defaultBackend,
+    forgeControlUrl: process.env.FORGERELAY_FORGE_CONTROL_URL || undefined,
 };
 
 const server = new Server(
-    { name: 'agentwatch', version: '0.1.0' },
+    { name: 'forgerelay', version: '0.1.0' },
     { capabilities: { tools: {}, logging: {} } }
 );
 
@@ -123,6 +137,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    logToolCall(request.params.name, str(args.agent));
 
     try {
         switch (request.params.name) {
@@ -199,7 +214,7 @@ async function main() {
                 method: 'notifications/message',
                 params: {
                     level: /\bSTOP\b/i.test(event.message) ? 'alert' : 'info',
-                    logger: 'agentwatch.board',
+                    logger: 'forgerelay.board',
                     data: { type: 'board_event', event },
                 },
             });
@@ -209,7 +224,7 @@ async function main() {
 }
 
 main().catch(err => {
-    process.stderr.write(`[agentwatch-stdio] fatal: ${err}\n`);
+    process.stderr.write(`[forgerelay-stdio] fatal: ${err}\n`);
     process.exit(1);
 });
 

@@ -1,137 +1,168 @@
 {
-  "name": "agentwatch",
-  "displayName": "AgentWatch",
-  "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP.",
-  "version": "0.3.6",
-  "publisher": "agentwatch",
+  "name": "forge-relay",
+  "displayName": "Forge Relay",
+  "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
+  "version": "0.3.9",
+  "publisher": "Efsoo",
   "license": "MIT",
+  "icon": "media/forge-relay-logo-128.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/agentwatch/agentwatch"
+    "url": "https://github.com/Efsoo/forge-relay"
   },
   "engines": {
     "vscode": "^1.100.0"
   },
-  "categories": ["AI", "Other"],
-  "keywords": ["ai", "agents", "coordination", "claude", "codex", "mcp", "multi-agent"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agents",
+    "coordination",
+    "claude",
+    "codex",
+    "mcp",
+    "multi-agent",
+    "forge"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "agentwatch",
-          "title": "AgentWatch",
-          "icon": "media/icon.svg"
+          "id": "forgeRelay",
+          "title": "Forge Relay",
+          "icon": "media/forge-relay-icon.svg"
         }
       ]
     },
     "views": {
-      "agentwatch": [
+      "forgeRelay": [
         {
           "type": "webview",
-          "id": "agentwatch.boardView",
+          "id": "forgeRelay.boardView",
           "name": "Board",
-          "icon": "media/icon.svg",
+          "icon": "media/forge-relay-icon.svg",
           "when": "workspaceFolderCount > 0"
         }
       ]
     },
     "commands": [
       {
-        "command": "agentwatch.openBoard",
-        "title": "AgentWatch: Open Board (Tab)"
+        "command": "forgeRelay.openBoard",
+        "title": "Forge Relay: Open Board (Tab)"
       },
       {
-        "command": "agentwatch.stopAll",
-        "title": "AgentWatch: STOP All Agents"
+        "command": "forgeRelay.stopAll",
+        "title": "Forge Relay: STOP All Agents"
       },
       {
-        "command": "agentwatch.showMcpConfig",
-        "title": "AgentWatch: Show MCP Config"
+        "command": "forgeRelay.showMcpConfig",
+        "title": "Forge Relay: Show MCP Config"
       },
       {
-        "command": "agentwatch.verifySetup",
-        "title": "AgentWatch: Verify Setup"
+        "command": "forgeRelay.verifySetup",
+        "title": "Forge Relay: Verify Setup"
       },
       {
-        "command": "agentwatch.toggleCodexBridge",
-        "title": "AgentWatch: Connect/Disconnect Codex Runtime Bridge"
+        "command": "forgeRelay.toggleCodexBridge",
+        "title": "Forge Relay: Connect/Disconnect Codex Runtime Bridge"
       },
       {
-        "command": "agentwatch.toggleClanker",
-        "title": "AgentWatch: Toggle Clanker Mode (worker write/edit/run)"
+        "command": "forgeRelay.toggleClanker",
+        "title": "Forge Relay: Toggle Clanker Mode (worker write/edit/run)"
       }
     ],
     "configuration": {
-      "title": "AgentWatch",
+      "title": "Forge Relay",
       "properties": {
-        "agentwatch.port": {
+        "forgeRelay.port": {
           "type": "number",
           "default": 7878,
-          "description": "Port for the AgentWatch MCP server. Both Claude Code and Codex CLI connect here."
+          "description": "Port for the Forge Relay MCP server. Both Claude Code and Codex CLI connect here."
         },
-        "agentwatch.claimTtlMinutes": {
+        "forgeRelay.claimTtlMinutes": {
           "type": "number",
           "default": 120,
           "description": "How long a file claim stays active before it expires automatically."
         },
-        "agentwatch.coordinationPath": {
+        "forgeRelay.coordinationPath": {
           "type": "string",
           "default": "",
           "description": "Absolute path to the repo being coordinated. Leave empty to use the current workspace folder."
         },
-        "agentwatch.nodePath": {
+        "forgeRelay.nodePath": {
           "type": "string",
           "default": "",
           "description": "Path to the Node.js binary used to run the runtime bridges. Leave empty to use 'node' from PATH."
         },
-        "agentwatch.claudePermissionMode": {
+        "forgeRelay.claudePermissionMode": {
           "type": "string",
           "default": "acceptEdits",
-          "enum": ["default", "acceptEdits", "bypassPermissions", "plan"],
+          "enum": [
+            "default",
+            "acceptEdits",
+            "bypassPermissions",
+            "plan"
+          ],
           "description": "Permission mode for the headless Claude (Mode B) runtime bridge. 'acceptEdits' lets it act on the board without prompts; 'bypassPermissions' is fully unattended but less safe."
         },
-        "agentwatch.claudeModel": {
+        "forgeRelay.claudeModel": {
           "type": "string",
           "default": "",
           "description": "Optional model override for the headless Claude (Mode B) runtime bridge. Leave empty to use your Claude Code default."
         },
-        "agentwatch.subagentBridgeUrl": {
+        "forgeRelay.subagentBridgeUrl": {
           "type": "string",
           "default": "http://127.0.0.1:9099/v1",
           "description": "OpenAI-compatible base URL for the continue-llamacpp-bridge backend used by dispatch_subagent (model id selects the GGUF)."
         },
-        "agentwatch.subagentOllamaUrl": {
+        "forgeRelay.subagentOllamaUrl": {
           "type": "string",
           "default": "http://127.0.0.1:11434/v1",
           "description": "OpenAI-compatible base URL for the Ollama backend used by dispatch_subagent (prefix a model with 'ollama:')."
         },
-        "agentwatch.subagentDirectUrl": {
+        "forgeRelay.subagentDirectUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8080/v1",
           "description": "OpenAI-compatible base URL for the direct llama.cpp llama-server backend (prefix a model with 'direct:')."
         },
-        "agentwatch.subagentBridgeApiKey": {
+        "forgeRelay.subagentBridgeApiKey": {
           "type": "string",
           "default": "",
           "description": "API key for the bridge backend, if it requires one."
         },
-        "agentwatch.subagentDefaultBackend": {
+        "forgeRelay.subagentDefaultBackend": {
           "type": "string",
           "default": "bridge",
-          "enum": ["bridge", "ollama", "direct"],
+          "enum": [
+            "bridge",
+            "ollama",
+            "direct"
+          ],
           "description": "Which backend an unprefixed dispatch_subagent model id targets (when the Forge route is off)."
         },
-        "agentwatch.subagentForgeControlUrl": {
+        "forgeRelay.subagentForgeControlUrl": {
           "type": "string",
           "default": "",
           "description": "Opt-in Forge model-control API base (e.g. http://127.0.0.1:8799). When set, dispatch_subagent routes unprefixed (and 'forge:'-prefixed) models through Forge, which loads the requested model on demand, waits until it is healthy, and returns its endpoint — eliminating 'fetch failed' / wrong-model errors. Leave empty to keep the direct bridge/ollama/direct routing."
         },
-        "agentwatch.defaultAutonomy": {
+        "forgeRelay.defaultAutonomy": {
           "type": "string",
           "default": "draft",
-          "enum": ["draft", "clanker"],
+          "enum": [
+            "draft",
+            "clanker"
+          ],
           "description": "Initial worker autonomy. 'draft' = workers are read-only and propose diffs (safe). 'clanker' = workers may write/edit/run directly, bounded by the destructive-command denylist. Toggle live with the 💥 board pill or the Toggle Clanker Mode command."
         }
       }

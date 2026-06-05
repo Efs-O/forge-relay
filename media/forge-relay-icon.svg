@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <!-- relay links (hub -> agents) -->
+  <line x1="12" y1="9.7" x2="12" y2="6.4"/>
+  <line x1="10.2" y1="13.5" x2="7.0" y2="16.2"/>
+  <line x1="13.8" y1="13.5" x2="17.1" y2="16.3"/>
+  <!-- central coordination hub -->
+  <circle cx="12" cy="12" r="2.3"/>
+  <!-- satellite agent nodes -->
+  <circle cx="12" cy="4.4" r="2"/>
+  <circle cx="5.4" cy="17.6" r="2"/>
+  <circle cx="18.6" cy="17.6" r="2"/>
+  <!-- relay signal dots traveling the links -->
+  <circle cx="12" cy="8.0" r="0.75" fill="currentColor" stroke="none"/>
+  <circle cx="8.6" cy="14.85" r="0.75" fill="currentColor" stroke="none"/>
+  <circle cx="15.45" cy="14.9" r="0.75" fill="currentColor" stroke="none"/>
+</svg>

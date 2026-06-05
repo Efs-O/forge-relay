@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { teeToLogFile } = require('./bridgeLog');
 
 // Windows-safe CLI launcher. `codex`/`claude` are installed as .cmd shims, which
 // Node's spawn cannot execute directly with shell:false. On win32 we go through
@@ -118,34 +119,7 @@ function sleep(ms) {
 // readable, so without this the bridge's turn handling (event triggers, codex
 // app-server output, stalls, errors) is invisible after the fact. Lines are
 // timestamped; the file lives next to the board at <repoRoot>/.coordination/.
-function teeToLogFile(eventPath) {
-    try {
-        const logPath = path.join(path.dirname(eventPath), 'codex-bridge.log');
-        const stream = fs.createWriteStream(logPath, { flags: 'a' });
-        stream.write(`\n==== codex bridge start ${new Date().toISOString()} (pid ${process.pid}) ====\n`);
-        for (const name of ['stdout', 'stderr']) {
-            const orig = process[name].write.bind(process[name]);
-            let buf = '';
-            process[name].write = (...args) => {
-                try {
-                    buf += String(args[0]);
-                    let nl;
-                    while ((nl = buf.indexOf('\n')) !== -1) {
-                        stream.write(`[${new Date().toISOString()}] ${buf.slice(0, nl)}\n`);
-                        buf = buf.slice(nl + 1);
-                    }
-                } catch {
-                    // never let logging break the bridge
-                }
-                return orig(...args);
-            };
-        }
-    } catch (err) {
-        process.stderr.write(`failed to set up bridge file log: ${err && err.message}\n`);
-    }
-}
-
-// Emit a machine-readable status line the AgentWatch supervisor parses to drive
+// Emit a machine-readable status line the Forge Relay supervisor parses to drive
 // the per-agent status dot (see src/runtimeBridge.ts).
 function emitStatus(token) {
     process.stdout.write(`[[AW_STATUS]] ${token}\n`);
@@ -162,7 +136,7 @@ function summarizeEvent(event) {
     if (event.agent) {
         parts.push(event.agent);
     }
-    // AgentWatch BoardEvent stores the body in `message`; older/alt shapes used note/command.
+    // Forge Relay BoardEvent stores the body in `message`; older/alt shapes used note/command.
     if (event.message) {
         parts.push(event.message);
     } else if (event.note) {
@@ -225,9 +199,9 @@ function buildTurnInput(event, agent) {
         {
             type: 'text',
             text: [
-                `A new AgentWatch board event may affect an ongoing task for ${agent}.`,
+                `A new Forge Relay board event may affect an ongoing task for ${agent}.`,
                 'Review the event and decide whether codex should continue coordination work, post status, claim files, dispatch workers, review results, release claims, or acknowledge/resolve a command.',
-                'Use the AgentWatch MCP tools directly whenever action is needed.',
+                'Use the Forge Relay MCP tools directly whenever action is needed.',
                 'If this event starts or updates an assigned task, continue that task rather than stopping at a board reply.',
                 'Only stand by when no further action is required at this time.',
                 '',
@@ -372,9 +346,9 @@ class CodexBridge {
                 const quotedRepoRoot = JSON.stringify(this.options.mcpRepoRoot);
                 appArgs.push(
                     '-c',
-                    'mcp_servers.agentwatch.command="node"',
+                    'mcp_servers.forgerelay.command="node"',
                     '-c',
-                    `mcp_servers.agentwatch.args=[${quotedScript},"--repoRoot",${quotedRepoRoot}]`,
+                    `mcp_servers.forgerelay.args=[${quotedScript},"--repoRoot",${quotedRepoRoot}]`,
                 );
             }
             appArgs.push('--listen', `ws://${host}:${port}`);
@@ -384,7 +358,7 @@ class CodexBridge {
                 // forward this env to MCP servers it spawns (confirmed via mcpstdio
                 // log), so per-workspace board routing cannot rely on it — kept only
                 // in case a future codex version does propagate env.
-                env: { ...process.env, AGENTWATCH_REPO_ROOT: this.options.repoRoot },
+                env: { ...process.env, FORGERELAY_REPO_ROOT: this.options.repoRoot },
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
 
@@ -454,7 +428,7 @@ class CodexBridge {
             throw lastError;
         }
         await this.rpc.send('initialize', {
-            clientInfo: { name: 'agentwatch-codex-bridge', version: '0.1.0' },
+            clientInfo: { name: 'forgerelay-codex-bridge', version: '0.1.0' },
         });
         process.stdout.write('codex app-server initialized\n');
     }
@@ -464,10 +438,10 @@ class CodexBridge {
             approvalPolicy: this.options.approvalPolicy,
             cwd: this.options.repoRoot,
             developerInstructions: [
-                'You are running inside the AgentWatch Codex auto bridge as the `codex` orchestrator.',
+                'You are running inside the Forge Relay Codex auto bridge as the `codex` orchestrator.',
                 'Each incoming board event may update an ongoing coordination task, not just require a reply.',
                 'When a task is assigned to `codex`, continue the coordination workflow across turns until it is completed, you are explicitly reassigned or stood down, you are genuinely blocked, or you receive SESSION_END or STOP/PAUSE.',
-                'Use the AgentWatch MCP tools directly for board_check, get_status, claim, release, post, ack_command, resolve_command, dispatch_subagent, and list_models as needed.',
+                'Use the Forge Relay MCP tools directly for board_check, get_status, claim, release, post, ack_command, resolve_command, dispatch_subagent, and list_models as needed.',
                 'Do not stop after posting status if execution work is still required.',
                 'Claim files before dispatching or editing, avoid duplicate board replies, and keep board posts concise ASCII one-liners.',
             ].join(' '),
@@ -629,7 +603,7 @@ class CodexBridge {
 
 async function main() {
     const options = parseArgs(process.argv.slice(2));
-    teeToLogFile(options.eventPath);
+    teeToLogFile(options.eventPath, 'codex-bridge.log', 'codex');
     process.stdout.write(`codex bridge: tailing board ${options.eventPath} (repoRoot=${options.repoRoot})\n`);
     emitStatus('waiting');
     const bridge = new CodexBridge(options);

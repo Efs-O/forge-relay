@@ -6,7 +6,7 @@ import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
 export class BoardPanel {
     public static current: BoardPanel | undefined;
-    private static readonly viewType = 'agentwatch.board';
+    private static readonly viewType = 'forgeRelay.board';
 
     private readonly panel: vscode.WebviewPanel;
     private readonly extensionUri: vscode.Uri;
@@ -28,7 +28,7 @@ export class BoardPanel {
 
         const panel = vscode.window.createWebviewPanel(
             BoardPanel.viewType,
-            'AgentWatch Board',
+            'Forge Relay Board',
             column,
             {
                 enableScripts: true,
@@ -86,7 +86,7 @@ export class BoardPanel {
     }
 
     private handleWebviewMessage(msg: WebviewMessage): void {
-        const config = vscode.workspace.getConfiguration('agentwatch');
+        const config = vscode.workspace.getConfiguration('forgeRelay');
         const defaultTtl = config.get<number>('claimTtlMinutes', 120);
 
         try {
@@ -184,7 +184,7 @@ export class BoardPanel {
                     break;
             }
         } catch (err) {
-            const message = `AgentWatch: ${err instanceof Error ? err.message : String(err)}`;
+            const message = `Forge Relay: ${err instanceof Error ? err.message : String(err)}`;
             vscode.window.showErrorMessage(message);
             this.panel.webview.postMessage({ type: 'error', message } satisfies ExtensionMessage);
         }

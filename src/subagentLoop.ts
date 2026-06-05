@@ -1,9 +1,9 @@
 import { spawnSync } from 'child_process';
 import { Bridge } from './bridge';
 import {
-    chatCompletionRaw, dispatchSubagentTier1, resolveModel, ResolvedModel,
-    SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote,
-    forgeRoute, forgeHealthz, withConnRetry, BackendConnectionError,
+    chatCompletionRaw, dispatchSubagentTier1, ResolvedModel,
+    SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote, nextWorkerOrdinal, formatWorkerPost,
+    decideForgeRoute, fetchForgeCatalog, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
 import { forgeHolds, forgeSlots } from './forgeHold';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
@@ -60,7 +60,7 @@ function systemPrompt(autonomy: string): string {
 /**
  * Tier 2 agentic worker loop (plan §3.3, Decision #3 revised). Runs an
  * OpenAI-style tool-calling ReAct loop against the resolved model endpoint,
- * executing AgentWatch's own sandboxed tools. Capability is bounded by the
+ * executing Forge Relay's own sandboxed tools. Capability is bounded by the
  * autonomy mode in `ctx` (draft = readonly+propose_diff, clanker = full r/w/run).
  */
 export async function runWorkerLoop(
@@ -184,7 +184,7 @@ export async function handleDispatchSubagent(
     const context = args.context !== undefined ? String(args.context) : undefined;
     const mode = String(args.mode ?? 'sync') === 'async' ? 'async' : 'sync';
 
-    const worker = workerAgentName(model);
+    const worker = workerAgentName(model, nextWorkerOrdinal());
 
     // Resolve the worker endpoint and a teardown hook. The Forge route (opt-in,
     // forgeControlUrl set or a "forge:" prefix) asks Forge to load the model and
@@ -195,22 +195,28 @@ export async function handleDispatchSubagent(
     // releases — exactly 1 /ensure + 1 /release per overlapping batch (Fix A). A
     // per-model slot cap then bounds in-flight workers to n_parallel (Fix C). When
     // the Forge route is off, this is exactly the previous direct/ollama/bridge probe.
-    const route = forgeRoute(model, backends);
+    const route = decideForgeRoute(
+        model,
+        backends,
+        backends.forgeControlUrl ? await fetchForgeCatalog(backends) : {
+            control: { backend: 'forge-control', baseUrl: '', ok: false, error: 'Forge control route is off.' },
+            bridge: { backend: 'forge-bridge', baseUrl: backends.bridgeUrl, ok: false, error: 'Forge route is off.' },
+        },
+    );
     let resolved: ResolvedModel;
     let modelNote = '';
     let release: () => Promise<void> = async () => { /* no-op when not routing via Forge */ };
     // Off the Forge route there is no slot cap — non-Forge routing is unchanged.
     let acquireSlot: () => Promise<() => void> = async () => () => { /* no-op */ };
 
-    if (route.viaForge && !backends.forgeControlUrl) {
-        // A "forge:" prefix was used but no control URL is configured.
-        return `SUBAGENT not dispatched (${model}) — "forge:" routing requested but no forgeControlUrl is configured (set agentwatch.subagentForgeControlUrl / AGENTWATCH_FORGE_CONTROL_URL).`;
+    if (route.kind === 'error') {
+        return `SUBAGENT not dispatched (${model}) - ${route.message}`;
     }
-    if (route.viaForge) {
+    if (route.kind === 'forge-control') {
         const controlUrl = backends.forgeControlUrl!;
         if (!(await forgeHealthz(controlUrl))) {
             const msg = `Forge control API not reachable at ${controlUrl} — is Forge running with control_server.enabled?`;
-            bridge.post(worker, `not dispatched (${model}): ${msg}`.slice(0, 300));
+            bridge.post(worker, formatWorkerPost(`not dispatched (${model}): ${msg}`));
             return `SUBAGENT not dispatched (${model}) — ${msg}`;
         }
         try {
@@ -225,7 +231,7 @@ export async function handleDispatchSubagent(
         } catch (err) {
             // 404 unknown / 409 busy / 502 load error all arrive as clear messages.
             const msg = err instanceof Error ? err.message : String(err);
-            bridge.post(worker, `not dispatched (${model}): ${msg}`.slice(0, 300));
+            bridge.post(worker, formatWorkerPost(`not dispatched (${model}): ${msg}`));
             return `SUBAGENT not dispatched (${model}) — ${msg}`;
         }
         // Bound same-model fan-out to the slot count; the (N+1)th worker queues
@@ -236,12 +242,12 @@ export async function handleDispatchSubagent(
         // a turn. Fail fast with a clear message if the model server is down;
         // otherwise carry a routing note (e.g. direct ignores the model id, or the
         // id isn't served) so the orchestrator knows what actually ran.
-        resolved = resolveModel(model, backends);
+        resolved = route.resolved;
         const probe = await validateBackend(resolved);
         if (!probe.reachable) {
             return `SUBAGENT not dispatched (${model}) — ${probe.message}`;
         }
-        modelNote = modelRoutingNote(resolved, probe.models);
+        modelNote = route.note ?? modelRoutingNote(resolved, probe.models);
     }
 
     // Tier 1 — reasoning-only completion.
@@ -264,7 +270,7 @@ export async function handleDispatchSubagent(
     const ctx: WorkerToolContext = { repoRoot: bridge.getRepoRoot(), autonomy };
 
     const checkpoint = autonomy === 'clanker' ? gitCheckpoint(ctx.repoRoot) : 'draft mode (no writes)';
-    bridge.post(worker, `started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (${resolved.backend}:${resolved.model})${modelNote}: ${task} | ${checkpoint}`.slice(0, 400));
+    bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (${resolved.backend}:${resolved.model})${modelNote}: ${task} | ${checkpoint}`));
 
     // The worker run, shared by sync and async. In async mode the done/error post
     // @mentions the dispatcher so the wake-on-@mention rule pulls the supervisor
@@ -305,9 +311,9 @@ export async function handleDispatchSubagent(
                     if (name === 'propose_diff' && res.proposalPath) {
                         // Point the orchestrator at the saved full diff instead of a
                         // truncated inline blob (P0 #2).
-                        bridge.post(worker, `propose_diff ${res.touched ?? ''} → full diff saved to ${res.proposalPath} (review & apply)`.slice(0, 300));
+                        bridge.post(worker, formatWorkerPost(`propose_diff ${res.touched ?? ''} → full diff saved to ${res.proposalPath} (review & apply)`));
                     } else if (res.mutated || name === 'propose_diff') {
-                        bridge.post(worker, `${name} ${res.touched ?? ''}: ${res.result.replace(/\s+/g, ' ').slice(0, 160)}`.slice(0, 300));
+                        bridge.post(worker, formatWorkerPost(`${name} ${res.touched ?? ''}: ${res.result}`));
                     }
                     if (res.mutated && res.touched && !claimed.has(res.touched)) {
                         claimed.add(res.touched);
@@ -315,11 +321,11 @@ export async function handleDispatchSubagent(
                     }
                 },
             });
-            bridge.post(worker, `${wake}done [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools${usageSuffix(result)}): ${result.finalText.replace(/\s+/g, ' ').slice(0, 180)}`.slice(0, 400));
+            bridge.post(worker, formatWorkerPost(`${wake}done [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools${usageSuffix(result)}): ${result.finalText}`));
             return result;
         } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
-            bridge.post(worker, `${wake}error [${subagentId.slice(0, 10)}]: ${error.replace(/\s+/g, ' ').slice(0, 180)}`.slice(0, 300));
+            bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${error}`));
             throw err;
         } finally {
             for (const p of claimed) {
@@ -339,7 +345,7 @@ export async function handleDispatchSubagent(
     // wakes the dispatcher via its @mentioned done post.
     if (mode === 'async') {
         void runWork(true).catch(() => { /* error already posted to the board */ });
-        return `SUBAGENT ${subagentId} (${model}, ${autonomy}) DISPATCHED (async). It is working in the background and will post progress as worker:${resolved.model}, then notify ${dispatcher} on the board when done. [${checkpoint}]`;
+        return `SUBAGENT ${subagentId} (${model}, ${autonomy}) DISPATCHED (async). It is working in the background and will post progress as ${worker}, then notify ${dispatcher} on the board when done. [${checkpoint}]`;
     }
 
     // Sync — block until done and return the result inline.

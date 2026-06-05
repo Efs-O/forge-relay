@@ -5,7 +5,7 @@ import { BoardState, ExtensionMessage, WebviewMessage } from './types';
 import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
 export class BoardViewProvider implements vscode.WebviewViewProvider {
-    public static readonly viewId = 'agentwatch.boardView';
+    public static readonly viewId = 'forgeRelay.boardView';
 
     private view?: vscode.WebviewView;
     private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -103,7 +103,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
     }
 
     private handleMessage(msg: WebviewMessage): void {
-        const config = vscode.workspace.getConfiguration('agentwatch');
+        const config = vscode.workspace.getConfiguration('forgeRelay');
         const defaultTtl = config.get<number>('claimTtlMinutes', 120);
 
         try {
@@ -194,7 +194,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                     break;
             }
         } catch (err) {
-            const message = `AgentWatch: ${err instanceof Error ? err.message : String(err)}`;
+            const message = `Forge Relay: ${err instanceof Error ? err.message : String(err)}`;
             vscode.window.showErrorMessage(message);
             this.post({ type: 'error', message });
         }

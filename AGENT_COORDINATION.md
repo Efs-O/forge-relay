@@ -1,5 +1,9 @@
 # Agent Coordination
 
+> **Legacy reference.** Agents now coordinate through the Forge Relay **MCP tools**
+> (see [AGENTS.md](AGENTS.md)). The PowerShell commands below are a human debugging
+> CLI; paths here point at an older Desktop repo and are illustrative only.
+
 Use this when two coding agents are working in the same Desktop repo at the same time.
 
 ## Rule Set

@@ -1,12 +1,12 @@
-# AgentWatch
+# Forge Relay
 
 **Multi-agent coordination board for VS Code.**
 
-AgentWatch lets Claude Code and Codex CLI (or any MCP-capable agent) work on the same repository in parallel — without stepping on each other. It provides file-level claims, a live event feed, operator STOP/PAUSE commands, and a persistent activity log, all visible in a VS Code sidebar panel.
+Forge Relay lets Claude Code and Codex CLI (or any MCP-capable agent) work on the same repository in parallel — without stepping on each other. It provides file-level claims, a live event feed, operator STOP/PAUSE commands, and a persistent activity log, all visible in a VS Code sidebar panel.
 
 ---
 
-## Why AgentWatch
+## Why Forge Relay
 
 When two AI coding agents work on the same repo simultaneously, they will:
 
@@ -14,7 +14,7 @@ When two AI coding agents work on the same repo simultaneously, they will:
 - produce conflicting changes in shared files
 - have no way to coordinate scope or hand off work
 
-AgentWatch solves this with a lightweight local control plane: a shared MCP server that both agents connect to, and a VS Code panel where the human operator watches and controls everything in real time.
+Forge Relay solves this with a lightweight local control plane: a shared MCP server that both agents connect to, and a VS Code panel where the human operator watches and controls everything in real time.
 
 There is no database, no cloud service, no API keys required beyond what the agents already use. All state is stored in plain JSON files in a `.coordination/` folder in your workspace.
 
@@ -23,7 +23,7 @@ There is no database, no cloud service, no API keys required beyond what the age
 ## Features
 
 - **VS Code sidebar** — always-visible board panel in the Activity Bar
-- **Tab panel** — larger view via `AgentWatch: Open Board (Tab)` command
+- **Tab panel** — larger view via `Forge Relay: Open Board (Tab)` command
 - **MCP server** — starts automatically on port 7878 when VS Code opens
 - **Manual setup guidance** — surfaces copy-ready MCP config snippets without mutating workspace or home config
 - **File claims** — agents claim files or folders before editing; the board blocks conflicting claims
@@ -62,8 +62,8 @@ Both the sidebar and tab panel share the same MCP server and the same `.coordina
 Requirements: Node.js 18+, VS Code 1.100+
 
 ```powershell
-git clone https://github.com/agentwatch/agentwatch
-cd agentwatch
+git clone https://github.com/Efsoo/forge-relay
+cd forge-relay
 npm install
 npm run build
 ```
@@ -71,53 +71,53 @@ npm run build
 Then press **F5** in VS Code to open the Extension Development Host, or run:
 
 ```powershell
-code --extensionDevelopmentPath="N:\vs code apps\Agentwatch" "C:\path\to\your\workspace"
+code --extensionDevelopmentPath="N:\vs code apps\forge-relay" "C:\path\to\your\workspace"
 ```
 
 ---
 
 ## Agent Setup
 
-AgentWatch does not write MCP config into your workspace or home directory.
+Forge Relay does not write MCP config into your workspace or home directory.
 
-Use **Command Palette -> AgentWatch: Show MCP Config** to view the exact snippets for this machine.
-Use **Command Palette -> AgentWatch: Verify Setup** to check whether this machine is ready.
+Use **Command Palette -> Forge Relay: Show MCP Config** to view the exact snippets for this machine.
+Use **Command Palette -> Forge Relay: Verify Setup** to check whether this machine is ready.
 
 ### First-time setup on a new machine
 
-AgentWatch handles these automatically once the extension is installed:
+Forge Relay handles these automatically once the extension is installed:
 
 - ships its own UI metadata such as icons and commands
-- starts the local AgentWatch MCP server when VS Code opens the workspace
+- starts the local Forge Relay MCP server when VS Code opens the workspace
 - includes repo-owned helper scripts such as `npm run codex:auto`
 
 You still need to configure these manually for each machine:
 
-- add the AgentWatch MCP block to Codex `config.toml`
-- add the AgentWatch MCP block to the Claude `settings.json` file you want to use
+- add the Forge Relay MCP block to Codex `config.toml`
+- add the Forge Relay MCP block to the Claude `settings.json` file you want to use
 
-Reason: AgentWatch intentionally does not silently edit user home config or workspace agent settings during activation.
+Reason: Forge Relay intentionally does not silently edit user home config or workspace agent settings during activation.
 
 Codex uses `C:\Users\efso office\.codex\config.toml`:
 
 ```toml
-[mcp_servers.agentwatch]
+[mcp_servers.forgerelay]
 command = "node"
-args = ["N:/vs code apps/Agentwatch/out/mcpStdio.js", "--repoRoot", "N:/vs code apps/Agentwatch"]
+args = ["N:/vs code apps/forge-relay/out/mcpStdio.js", "--repoRoot", "N:/vs code apps/forge-relay"]
 ```
 
 Claude Code reads `settings.json` style config files. In this environment the observed locations are:
 
 - `C:\Users\efso office\.claude\settings.json`
-- `N:\vs code apps\Agentwatch\.claude\settings.json`
-- `N:\vs code apps\Agentwatch\.claude\settings.local.json`
+- `N:\vs code apps\forge-relay\.claude\settings.json`
+- `N:\vs code apps\forge-relay\.claude\settings.local.json`
 
 Add or merge this into the Claude settings file you want to use:
 
 ```json
 {
   "mcpServers": {
-    "agentwatch": {
+    "forgerelay": {
       "type": "sse",
       "url": "http://127.0.0.1:7878/sse"
     }
@@ -129,13 +129,13 @@ If Claude stops launching after a workspace-level config change, rename workspac
 
 ### Codex inbound bridge
 
-Codex has a supported inbound trigger path through the documented `codex app-server` JSON-RPC interface. AgentWatch now ships a bridge wrapper that:
+Codex has a supported inbound trigger path through the documented `codex app-server` JSON-RPC interface. Forge Relay now ships a bridge wrapper that:
 
 - starts `codex app-server`
 - opens a Codex thread inside the repo
 - watches `.coordination/events.ndjson`
 - forwards matching board events into Codex with `turn/start`
-- lets Codex answer back through the existing AgentWatch MCP tools
+- lets Codex answer back through the existing Forge Relay MCP tools
 
 Run it from the repo root:
 
@@ -161,13 +161,13 @@ This proves a supported Codex inbound trigger exists. It does not by itself mean
 If you run Codex unattended through the bridge, you may see recurring errors in
 the Codex log such as `codex_apps` / `chatgpt.com/backend-api/wham/apps` timeouts
 or `ces/v1/rgstr 403`. **These come from Codex's own ChatGPT connectors/apps
-feature — they are not AgentWatch**, and our harmless `resources/list -32601`
+feature — they are not Forge Relay**, and our harmless `resources/list -32601`
 (method not found) is unrelated too. But those connector failures can make the
 IDE Codex session restart, which looks like a bridge problem.
 
 For stable unattended runs, **disable Codex's connectors/apps/plugins** (in the
-Codex/ChatGPT settings for the account Codex is signed into). The AgentWatch
-bridge needs only the `codex app-server` JSON-RPC interface and the AgentWatch
+Codex/ChatGPT settings for the account Codex is signed into). The Forge Relay
+bridge needs only the `codex app-server` JSON-RPC interface and the Forge Relay
 MCP tools — none of the ChatGPT-apps connectors.
 
 ---
@@ -263,8 +263,8 @@ For Claude Code, add a pre-tool hook to enforce the pre-flight check automatical
 
 | Setting | Default | Description |
 |---|---|---|
-| `agentwatch.port` | `7878` | MCP server port. Change if 7878 is already in use. |
-| `agentwatch.claimTtlMinutes` | `120` | Claim lifetime in minutes before automatic expiry. |
+| `forgeRelay.port` | `7878` | MCP server port. Change if 7878 is already in use. |
+| `forgeRelay.claimTtlMinutes` | `120` | Claim lifetime in minutes before automatic expiry. |
 
 ---
 
@@ -286,9 +286,9 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 
 | Command | Description |
 |---|---|
-| `AgentWatch: Open Board (Tab)` | Open the board as a full editor tab for a larger view |
-| `AgentWatch: STOP All Agents` | Post an immediate STOP command targeting all agents |
-| `AgentWatch: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
+| `Forge Relay: Open Board (Tab)` | Open the board as a full editor tab for a larger view |
+| `Forge Relay: STOP All Agents` | Post an immediate STOP command targeting all agents |
+| `Forge Relay: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
 
 ---
 

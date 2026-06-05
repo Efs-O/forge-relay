@@ -1,4 +1,4 @@
-$p = 'N:\vs code apps\Agentwatch\.coordination\events.ndjson'
+$p = 'N:\vs code apps\forge-relay\.coordination\events.ndjson'
 $pos = 0
 if (Test-Path $p) { $pos = (Get-Item $p).Length }
 while ($true) {

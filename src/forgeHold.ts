@@ -157,10 +157,10 @@ export class ConcurrencyLimiter {
 /**
  * Default in-flight cap for a same-model Forge fan-out (Fix C). Mirrors the
  * `n_parallel` slot count Forge/llama-server is configured with (4). Override
- * with `AGENTWATCH_FORGE_PARALLEL` for fleets tuned to a different slot count.
+ * with `FORGERELAY_FORGE_PARALLEL` for fleets tuned to a different slot count.
  */
 export const FORGE_PARALLEL_DEFAULT: number = (() => {
-    const n = Number(process.env.AGENTWATCH_FORGE_PARALLEL);
+    const n = Number(process.env.FORGERELAY_FORGE_PARALLEL);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 4;
 })();
 

@@ -1,5 +1,10 @@
 # Board Info
 
+> **Legacy reference (script internals only).** Agents coordinate through the
+> Forge Relay **MCP tools** — see [AGENTS.md](AGENTS.md) / [SHARED_AGENT_PROMPT.md](SHARED_AGENT_PROMPT.md).
+> The PowerShell scripts described below are retained as a human debugging CLI;
+> some paths in this file point at an older repo location and are illustrative only.
+
 This repo includes a small local coordination board for parallel human or agent work.
 
 Primary files:

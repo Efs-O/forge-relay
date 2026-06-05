@@ -1,11 +1,11 @@
 {
   "mcpServers": {
-    "agentwatch": {
+    "forgerelay": {
       "command": "node",
       "args": [
-        "c:\\Users\\efso office\\.vscode\\extensions\\agentwatch.agentwatch-0.1.0\\out\\mcpStdio.js",
+        "n:/vs code apps/forge-relay/out/mcpStdio.js",
         "--repoRoot",
-        "n:\\vs code apps\\Agentwatch"
+        "n:/vs code apps/forge-relay"
       ]
     }
   }

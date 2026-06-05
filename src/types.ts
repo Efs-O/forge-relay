@@ -76,7 +76,7 @@ export interface BoardEventNotificationData {
     event: BoardEvent;
 }
 
-export type RuntimeBridgeStatus = 'inactive' | 'waiting' | 'linked' | 'error' | 'unsupported' | 'stopped';
+export type RuntimeBridgeStatus = 'inactive' | 'waiting' | 'linked' | 'follower' | 'error' | 'unsupported' | 'stopped';
 
 export interface SessionRoster {
     claude: boolean;

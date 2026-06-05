@@ -40,7 +40,7 @@ export class McpServer {
 
     /**
      * Bind the MCP HTTP server. Tries `desiredPort` first and, if it is already
-     * in use (another AgentWatch window, a stale server), scans upward for a free
+     * in use (another Forge Relay window, a stale server), scans upward for a free
      * port instead of failing. This keeps multiple VS Code windows from colliding
      * on a single fixed port — the primary window keeps the configured port, and
      * later windows transparently move up. Resolves with the actual bound port,
@@ -148,7 +148,7 @@ export class McpServer {
             const onError = (err: NodeJS.ErrnoException): void => {
                 cleanup();
                 if (err.code === 'EADDRINUSE' && attemptsLeft > 1) {
-                    console.log(`[AgentWatch] MCP port ${port} in use; trying ${port + 1}`);
+                    console.log(`[Forge Relay] MCP port ${port} in use; trying ${port + 1}`);
                     this.listenWithFallback(port + 1, attemptsLeft - 1).then(resolve, reject);
                 } else {
                     reject(err);
@@ -157,7 +157,7 @@ export class McpServer {
             const onListening = (): void => {
                 cleanup();
                 this.port = port;
-                console.log(`[AgentWatch] MCP server listening on http://127.0.0.1:${port}/sse`);
+                console.log(`[Forge Relay] MCP server listening on http://127.0.0.1:${port}/sse`);
                 resolve(port);
             };
 
@@ -188,7 +188,7 @@ export class McpServer {
 
     private buildMcpServer(): Server {
         const server = new Server(
-            { name: 'agentwatch', version: '0.1.0' },
+            { name: 'forgerelay', version: '0.1.0' },
             { capabilities: { tools: {}, logging: {} } }
         );
 
@@ -427,7 +427,7 @@ export class McpServer {
             sessions.map(session =>
                 session.server.sendLoggingMessage({
                     level: 'info',
-                    logger: 'agentwatch.board',
+                    logger: 'forgerelay.board',
                     data: payload,
                 })
             )

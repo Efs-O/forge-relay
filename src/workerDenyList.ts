@@ -1,6 +1,6 @@
-// Destructive-command denylist + exec guards for AgentWatch subagent workers.
+// Destructive-command denylist + exec guards for Forge Relay subagent workers.
 // Ported from Forge (N:\vs code apps\Forge\src\tools\DenyList.ts + execHelpers.ts)
-// so the guards apply in AgentWatch's *decoupled* worker loop — Forge's own
+// so the guards apply in Forge Relay's *decoupled* worker loop — Forge's own
 // guards only run inside Forge's webview and are not in our path (plan Decision
 // #3 revised, #4). Keep this in sync if Forge's denylist changes.
 

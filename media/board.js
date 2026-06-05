@@ -30,8 +30,12 @@ const codexInfoBlock = /** @type {HTMLElement} */ (document.getElementById('code
 
 /** @type {any[]}*/
 let latestEvents = [];
+/** @type {any[]} */
+let currentFeedEvents = [];
 /** @type {{ event: any, count: number }[]}*/
 let latestRenderedEntries = [];
+const expandedEventIndices = new Set();
+const EVENT_MESSAGE_PREVIEW_CHARS = 700;
 let currentSessionState = null;
 let shouldAutoScroll = true;
 /** @type {{ status: string, detail: string }} */
@@ -241,8 +245,10 @@ function renderCommands(commands) {
 
 /** @param {any[]} events */
 function renderEvents(events) {
+    currentFeedEvents = events;
     if (events.length === 0) {
         latestRenderedEntries = [];
+        expandedEventIndices.clear();
         eventFeed.innerHTML = '';
         feedEmpty.classList.remove('hidden');
         return;
@@ -253,6 +259,12 @@ function renderEvents(events) {
     latestRenderedEntries = collapsed;
     eventFeed.innerHTML = collapsed.map((entry, index) => {
         const event = entry.event;
+        const message = String(event.message ?? '');
+        const expanded = expandedEventIndices.has(index);
+        const truncated = message.length > EVENT_MESSAGE_PREVIEW_CHARS;
+        const displayMessage = truncated && !expanded
+            ? `${message.slice(0, EVENT_MESSAGE_PREVIEW_CHARS)}...`
+            : message;
         return `
             <article class="event-row type-${esc(event.type)}">
                 <div class="event-top">
@@ -263,10 +275,11 @@ function renderEvents(events) {
                     </div>
                     <button class="small event-copy-button" data-copy-event="${index}" type="button">Copy</button>
                 </div>
-                <div class="event-message">
-                    ${esc(event.message)}
+                <div class="event-message ${truncated && !expanded ? 'is-collapsed' : ''}">
+                    ${esc(displayMessage)}
                     ${entry.count > 1 ? `<span class="event-dup-count">x${entry.count}</span>` : ''}
                 </div>
+                ${truncated ? `<div class="event-actions-inline"><button class="link-button event-expand-button" data-expand-event="${index}" type="button">${expanded ? 'Show less' : 'Show more'}</button></div>` : ''}
             </article>
         `;
     }).join('');
@@ -277,7 +290,7 @@ function renderEvents(events) {
 }
 
 function renderSessionPrompts() {
-    promptClaude.textContent = `/loop Watch the AgentWatch board via the MCP board_check and get_status tools. When a new post from "user" or "codex" appears, act on it and reply with the post tool. Your agent name is "claude" — claim files before editing and post progress updates. Self-pace; keep going until you see SESSION_END.`;
+    promptClaude.textContent = `/loop Watch the Forge Relay board via the MCP board_check and get_status tools. When a new post from "user" or "codex" appears, act on it and reply with the post tool. Your agent name is "claude" — claim files before editing and post progress updates. Self-pace; keep going until you see SESSION_END.`;
 }
 
 /** Show only the prompt/info blocks relevant to the current roster + Claude mode. */
@@ -369,7 +382,7 @@ document.getElementById('btn-pause')?.addEventListener('click', () => {
 });
 
 document.getElementById('btn-clear-commands')?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'clearAllCommands', agent: agent(), note: 'Cleared from AgentWatch panel' });
+    vscode.postMessage({ type: 'clearAllCommands', agent: agent(), note: 'Cleared from Forge Relay panel' });
 });
 
 document.getElementById('btn-clear-history')?.addEventListener('click', () => {
@@ -478,19 +491,31 @@ commandsList.addEventListener('click', event => {
 
     const ackId = target.getAttribute('data-ack');
     if (ackId) {
-        vscode.postMessage({ type: 'ack', agent: agent(), commandId: ackId, note: 'Acknowledged via AgentWatch panel' });
+        vscode.postMessage({ type: 'ack', agent: agent(), commandId: ackId, note: 'Acknowledged via Forge Relay panel' });
         return;
     }
 
     const resolveId = target.getAttribute('data-resolve');
     if (resolveId) {
-        vscode.postMessage({ type: 'resolve', agent: agent(), commandId: resolveId, note: 'Resolved via AgentWatch panel' });
+        vscode.postMessage({ type: 'resolve', agent: agent(), commandId: resolveId, note: 'Resolved via Forge Relay panel' });
     }
 });
 
 eventFeed.addEventListener('click', async event => {
     const target = /** @type {HTMLElement | null} */ (event.target instanceof HTMLElement ? event.target : null);
     if (!target) {
+        return;
+    }
+
+    const expandIndex = target.getAttribute('data-expand-event');
+    if (expandIndex !== null) {
+        const index = Number(expandIndex);
+        if (expandedEventIndices.has(index)) {
+            expandedEventIndices.delete(index);
+        } else {
+            expandedEventIndices.add(index);
+        }
+        renderEvents(currentFeedEvents);
         return;
     }
 
@@ -510,6 +535,27 @@ eventFeed.addEventListener('click', async event => {
         showBanner('Event copied.', 'notice');
     } catch {
         showBanner('Copy failed for that event.', 'error');
+    }
+});
+
+document.addEventListener('keydown', async event => {
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c') {
+        return;
+    }
+    if (isEditableTarget(event.target)) {
+        return;
+    }
+    const selection = window.getSelection();
+    const text = selection ? selection.toString() : '';
+    if (!text.trim()) {
+        return;
+    }
+    event.preventDefault();
+    try {
+        await navigator.clipboard.writeText(text);
+        showBanner('Selection copied.', 'notice');
+    } catch {
+        showBanner('Copy failed for the current selection.', 'error');
     }
 });
 
@@ -557,13 +603,22 @@ function agentSlug(value) {
  */
 function agentBadge(agent) {
     const raw = String(agent ?? '');
-    if (raw.toLowerCase().startsWith('worker:')) {
-        const modelId = raw.slice(raw.indexOf(':') + 1);
+    const workerMatch = /^worker(?:-(\d+))?:(.+)$/i.exec(raw);
+    if (workerMatch) {
+        const ordinal = workerMatch[1];
+        const modelId = workerMatch[2];
         const tint = modelTint(modelId);
-        return `<span class="event-agent event-agent-worker">WORKER</span>`
+        return `<span class="event-agent event-agent-worker">${ordinal ? `WORKER-${esc(ordinal)}` : 'WORKER'}</span>`
             + `<span class="event-agent event-agent-model" title="${esc(modelId)}" style="color:${tint}">${esc(shortenModel(modelId))}</span>`;
     }
     return `<span class="event-agent event-agent-${agentSlug(raw)}">${esc(raw)}</span>`;
+}
+
+function isEditableTarget(target) {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+    return Boolean(target.closest('textarea, input, [contenteditable="true"]'));
 }
 
 /** Trim a model id to something board-friendly (strip backend prefix + .gguf). */

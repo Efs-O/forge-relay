@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 160" width="560" height="160" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#222b3f"/>
+      <stop offset="1" stop-color="#0e1320"/>
+    </linearGradient>
+    <linearGradient id="ember" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc15e"/>
+      <stop offset="1" stop-color="#ff7a18"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff8a3d" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ff8a3d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- mark (128px tile, scaled to 128 box at left) -->
+  <g transform="translate(16,16) scale(0.5)">
+    <rect x="0" y="0" width="256" height="256" rx="58" fill="url(#bg)"/>
+    <circle cx="128" cy="130" r="92" fill="url(#glow)"/>
+    <g stroke="#ff8a3d" stroke-opacity="0.75" stroke-width="5" stroke-linecap="round">
+      <line x1="128" y1="112" x2="128" y2="74"/>
+      <line x1="113" y1="139" x2="80" y2="166"/>
+      <line x1="143" y1="139" x2="176" y2="166"/>
+    </g>
+    <g fill="url(#ember)">
+      <circle cx="128" cy="93" r="4.5"/>
+      <circle cx="96.5" cy="152.5" r="4.5"/>
+      <circle cx="159.5" cy="152.5" r="4.5"/>
+    </g>
+    <g fill="#e8eef9" stroke="#ff8a3d" stroke-width="3">
+      <circle cx="128" cy="60" r="13"/>
+      <circle cx="66" cy="180" r="13"/>
+      <circle cx="190" cy="180" r="13"/>
+    </g>
+    <circle cx="128" cy="128" r="20" fill="url(#ember)"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="168" y="82" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="50" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="#e8eef9">Forge </tspan><tspan fill="#ff8a3d">Relay</tspan>
+  </text>
+  <text x="170" y="112" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="400" letter-spacing="0.5" fill="#8b95a7">Multi-agent coordination board</text>
+</svg>
