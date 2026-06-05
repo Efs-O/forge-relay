@@ -2,3 +2,4 @@ node_modules/
 out/
 .coordination/
 *.vsix
+__pycache__/
