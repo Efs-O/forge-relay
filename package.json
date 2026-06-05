@@ -4,7 +4,7 @@
   "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
   "version": "0.3.9",
   "publisher": "Efsoo",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "icon": "media/forge-relay-logo-128.png",
   "galleryBanner": {
     "color": "#1a1a2e",
