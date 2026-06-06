@@ -33,19 +33,6 @@ try {
         `[${new Date().toISOString()}] mcpStdio start pid=${process.pid} -> board=${eventsPath} `
         + `(env FORGERELAY_REPO_ROOT=${process.env.FORGERELAY_REPO_ROOT || '(unset)'}, --repoRoot arg=${argRepo}, cwd=${process.cwd()})\n`,
     );
-    // TEMP DIAGNOSTIC (env-probe): does Codex pass the workspace to a spawned MCP
-    // server? Dump all env KEY NAMES (never values — could be secrets), plus the
-    // values only for a safe workspace/project allowlist. Remove after we read it.
-    const safe = /^(CODEX|VSCODE|WORKSPACE|PROJECT|FORGE|FORGERELAY|PWD|INIT_CWD|OLDPWD)/i;
-    const keys = Object.keys(process.env).sort();
-    const safeVals = keys
-        .filter((k) => safe.test(k))
-        .map((k) => `${k}=${process.env[k]}`);
-    fs.appendFileSync(
-        path.join(path.dirname(eventsPath), 'mcpstdio.log'),
-        `[${new Date().toISOString()}] env-probe pid=${process.pid} allKeys=[${keys.join(',')}]\n`
-        + `[${new Date().toISOString()}] env-probe pid=${process.pid} safeVals={${safeVals.join(' | ')}}\n`,
-    );
 } catch {
     // logging is best-effort; never block startup
 }
