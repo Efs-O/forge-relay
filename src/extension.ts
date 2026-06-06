@@ -29,6 +29,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const coordPath = config.get<string>('coordinationPath', '').trim();
     const repoRoot = coordPath || workspaceRoot;
 
+    // "Forge Relay" Output channel: a single place to watch managed-bridge output
+    // (startup banners, [[AW_STATUS]] transitions, telemetry lines, crashes) from
+    // View -> Output. Bridge stdout/stderr funnels here through RuntimeManager.onLog.
+    const output = vscode.window.createOutputChannel('Forge Relay');
+    context.subscriptions.push(output);
+    const log = (line: string): void => {
+        output.appendLine(`[${new Date().toISOString().slice(11, 19)}] ${line}`);
+    };
+    log(`Forge Relay activated — repoRoot=${repoRoot}`);
+
     const bridge = new Bridge(repoRoot);
     bridge.ensureAutonomyDefault(config.get<'draft' | 'clanker'>('defaultAutonomy', 'draft'));
     mcpServer = new McpServer(bridge, {
@@ -38,6 +48,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         bridgeApiKey: config.get<string>('subagentBridgeApiKey', '').trim() || undefined,
         defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'bridge'),
         forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
+        defaultRunMode: config.get<'sync' | 'async'>('subagentDefaultMode', 'sync'),
     });
 
     let port: number;
@@ -46,6 +57,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // collide on one fixed port. `port` is the actual bound port from here on.
         port = await mcpServer.start(desiredPort);
     } catch (err) {
+        log(`ERROR: could not start MCP server (tried from port ${desiredPort}): ${err}`);
         vscode.window.showErrorMessage(`Forge Relay: Could not start MCP server (tried from port ${desiredPort}). ${err}`);
         return;
     }
@@ -70,7 +82,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         nodePath: config.get<string>('nodePath', '').trim() || undefined,
         claudePermissionMode: config.get<string>('claudePermissionMode', 'acceptEdits').trim() || undefined,
         claudeModel: config.get<string>('claudeModel', '').trim() || undefined,
-        onLog: (line) => console.log('[forgerelay:bridge]', line),
+        claudeKeepAliveMs: config.get<number>('claudeKeepAliveMs', 0),
+        onLog: (line) => { log(`[bridge] ${line}`); console.log('[forgerelay:bridge]', line); },
     });
     const rm = runtimeManager;
 
@@ -81,13 +94,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             : snap.claude.status !== 'inactive' ? { name: 'Claude', ...snap.claude }
             : { name: 'Codex', ...snap.codex };
         runtimeStatusBar.text = `$(${statusBarIcon(lead.status)}) Forge Relay: ${lead.name} ${lead.status}`;
-        runtimeStatusBar.tooltip = `Codex bridge — ${snap.codex.detail}\nClaude bridge — ${snap.claude.detail}\nClick to ${rm.isAnyActive() ? 'disconnect Codex' : 'connect Codex'}.`;
+        runtimeStatusBar.tooltip = `Managed Codex bridge - ${snap.codex.detail}\nClaude bridge - ${snap.claude.detail}\nClick to ${rm.isAnyActive() ? 'disconnect the managed Codex bridge' : 'connect the managed Codex bridge'}.`;
         runtimeStatusBar.show();
     };
     rm.onChange((snapshot) => {
         renderStatusBar();
         // Persist the roster so the selected bridges auto-reconnect after a reload.
-        void context.workspaceState.update(ROSTER_KEY, { roster: snapshot.roster, claudeMode: snapshot.claudeMode });
+        void context.workspaceState.update(ROSTER_KEY, {
+            roster: snapshot.roster,
+            claudeMode: snapshot.claudeMode,
+            managedCodexBridge: snapshot.managedCodexBridge,
+        });
     });
     renderStatusBar();
 
@@ -100,14 +117,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Restore the previous session roster so selected bridges auto-reconnect
     // after a window reload (survives restart, per P2/P3).
-    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode }>(ROSTER_KEY);
+    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode; managedCodexBridge?: boolean }>(ROSTER_KEY);
     if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex)) {
-        // Single-process codex policy: never auto-spawn a codex bridge on restore.
-        // A 2nd codex app-server fights the Codex sidebar over the one ChatGPT OAuth
-        // login (refresh_token_reused/token_revoked) and goes unresponsive. Codex
-        // coordinates through the forgerelay MCP server in its own ~/.codex/config.toml
-        // instead. The operator can still re-check Codex in the Connect modal per-session.
-        rm.setRoster({ ...savedSession.roster, codex: false }, savedSession.claudeMode ?? 'A');
+        // Single-process codex policy: never auto-spawn a managed Codex bridge on
+        // restore. If Codex was selected for the session, keep it selected so the
+        // board UI reflects that intent, but force the managed bridge off.
+        rm.setRoster({ ...savedSession.roster }, savedSession.claudeMode ?? 'A', false);
     }
 
     context.subscriptions.push(
@@ -140,10 +155,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('forgeRelay.toggleCodexBridge', () => {
             if (rm.getSnapshot().codex.status === 'inactive') {
                 rm.connectCodex();
-                vscode.window.setStatusBarMessage('Forge Relay: Codex runtime bridge connecting…', 4000);
+                vscode.window.setStatusBarMessage('Forge Relay: managed Codex bridge connecting...', 4000);
             } else {
                 rm.disconnectCodex();
-                vscode.window.setStatusBarMessage('Forge Relay: Codex runtime bridge disconnected.', 4000);
+                vscode.window.setStatusBarMessage('Forge Relay: managed Codex bridge disconnected.', 4000);
             }
         }),
 

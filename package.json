@@ -2,7 +2,7 @@
   "name": "forge-relay",
   "displayName": "Forge Relay",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.3.9",
+  "version": "0.3.14",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "icon": "media/forge-relay-logo-128.png",
@@ -75,7 +75,7 @@
       },
       {
         "command": "forgeRelay.toggleCodexBridge",
-        "title": "Forge Relay: Connect/Disconnect Codex Runtime Bridge"
+        "title": "Forge Relay: Connect/Disconnect Managed Codex Runtime Bridge (Debug)"
       },
       {
         "command": "forgeRelay.toggleClanker",
@@ -121,6 +121,11 @@
           "default": "",
           "description": "Optional model override for the headless Claude (Mode B) runtime bridge. Leave empty to use your Claude Code default."
         },
+        "forgeRelay.claudeKeepAliveMs": {
+          "type": "number",
+          "default": 0,
+          "description": "Cache keep-alive interval (ms) for the headless Claude (Mode B) bridge. When > 0, the bridge sends an inert no-op turn after this much board idle to keep the prompt cache warm across the ~5-minute TTL. 0 disables it (rely on natural activity). For an A/B test set this just under the TTL, e.g. 240000 (4 min)."
+        },
         "forgeRelay.subagentBridgeUrl": {
           "type": "string",
           "default": "http://127.0.0.1:9099/v1",
@@ -140,6 +145,19 @@
           "type": "string",
           "default": "",
           "description": "API key for the bridge backend, if it requires one."
+        },
+        "forgeRelay.subagentDefaultMode": {
+          "type": "string",
+          "default": "sync",
+          "enum": [
+            "sync",
+            "async"
+          ],
+          "enumDescriptions": [
+            "Blocks until the worker finishes and returns its result inline — best for quick tasks; folds the worker output into the orchestrator's context.",
+            "Fires the worker in the background and returns immediately; the worker posts progress/result to the board and @mentions the orchestrator when done — best for parallel fan-out (e.g. the 8-worker run)."
+          ],
+          "description": "Default run mode for dispatch_subagent when the orchestrator does not specify `mode`. The orchestrator can still override per-call. Set to 'async' to make parallel background dispatch the default."
         },
         "forgeRelay.subagentDefaultBackend": {
           "type": "string",
@@ -174,7 +192,8 @@
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.js",
-    "codex:auto": "node scripts/codex-auto-bridge.js --repo-root ."
+    "codex:auto": "node scripts/codex-auto-bridge.js --repo-root .",
+    "probe:xmlnl": "node scripts/xml-nl-probe.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

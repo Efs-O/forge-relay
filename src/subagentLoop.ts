@@ -182,7 +182,7 @@ export async function handleDispatchSubagent(
 
     const requestedTools = (String(args.tools ?? 'none') as SubagentToolMode);
     const context = args.context !== undefined ? String(args.context) : undefined;
-    const mode = String(args.mode ?? 'sync') === 'async' ? 'async' : 'sync';
+    const mode = String(args.mode ?? backends.defaultRunMode ?? 'sync') === 'async' ? 'async' : 'sync';
 
     const worker = workerAgentName(model, nextWorkerOrdinal());
 

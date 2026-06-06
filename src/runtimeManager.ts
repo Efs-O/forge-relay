@@ -13,6 +13,7 @@ export interface RuntimeSnapshot {
     claude: RuntimeAgentSnapshot;
     roster: SessionRoster;
     claudeMode: ClaudeMode;
+    managedCodexBridge: boolean;
 }
 
 export interface RuntimeManagerOptions {
@@ -31,6 +32,12 @@ export interface RuntimeManagerOptions {
     claudePermissionMode?: string;
     /** Optional Claude model override for the headless bridge. */
     claudeModel?: string;
+    /**
+     * Cache keep-alive interval (ms) for the headless Claude bridge. When > 0 it
+     * is passed through as `--debug-keep-alive-ms`, so the bridge sends an inert
+     * no-op turn after this much idle to keep the prompt cache warm. 0 = off.
+     */
+    claudeKeepAliveMs?: number;
     onLog?: (line: string) => void;
 }
 
@@ -49,6 +56,7 @@ export class RuntimeManager {
     private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
     private roster: SessionRoster = { claude: false, codex: false };
     private claudeMode: ClaudeMode = 'A';
+    private managedCodexBridge = false;
     /** Absolute path to this extension build's out/mcpStdio.js (resolved from
      *  context.extensionUri at activation, so it always points at the *current*
      *  install — this is what makes the Mode A config self-healing). */
@@ -82,6 +90,9 @@ export class RuntimeManager {
         if (opts.claudeModel) {
             claudeArgs.push('--model', opts.claudeModel);
         }
+        if (opts.claudeKeepAliveMs && opts.claudeKeepAliveMs > 0) {
+            claudeArgs.push('--debug-keep-alive-ms', String(opts.claudeKeepAliveMs));
+        }
         this.claude = new ScriptRuntimeBridge({
             agent: 'claude',
             scriptPath: opts.claudeScriptPath,
@@ -105,6 +116,7 @@ export class RuntimeManager {
             claude: { status: this.claude.status(), detail: this.claude.detailText() },
             roster: { ...this.roster },
             claudeMode: this.claudeMode,
+            managedCodexBridge: this.managedCodexBridge,
         };
     }
 
@@ -122,11 +134,12 @@ export class RuntimeManager {
      * The Claude headless bridge runs only for selected + Mode B; Mode A is the
      * user's own /loop paste (no managed process).
      */
-    setRoster(roster: SessionRoster, claudeMode: ClaudeMode): void {
+    setRoster(roster: SessionRoster, claudeMode: ClaudeMode, managedCodexBridge = false): void {
         this.roster = { ...roster };
         this.claudeMode = claudeMode;
+        this.managedCodexBridge = managedCodexBridge;
 
-        if (roster.codex) {
+        if (roster.codex && this.managedCodexBridge) {
             this.codex.start();
         } else {
             this.codex.stop();
@@ -201,12 +214,15 @@ export class RuntimeManager {
 
     connectCodex(): void {
         this.roster.codex = true;
+        this.managedCodexBridge = true;
         this.codex.start();
+        this.emit();
     }
 
     disconnectCodex(): void {
-        this.roster.codex = false;
+        this.managedCodexBridge = false;
         this.codex.stop();
+        this.emit();
     }
 
     /** Whether any managed runtime is currently active (or trying to be). */
@@ -216,6 +232,7 @@ export class RuntimeManager {
 
     stopAll(): void {
         this.roster = { claude: false, codex: false };
+        this.managedCodexBridge = false;
         this.codex.stop();
         this.claude.stop();
     }

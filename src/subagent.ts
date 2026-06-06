@@ -24,6 +24,13 @@ export interface SubagentBackends {
      * (default) keeps the existing bridge/ollama/direct routing untouched.
      */
     forgeControlUrl?: string;
+    /**
+     * Default run mode for dispatch_subagent when the orchestrator omits `mode`.
+     * 'sync' (default) blocks and returns the result inline; 'async' fires the
+     * worker in the background and posts back to the board. Lets an operator make
+     * async the default for parallel fan-out without relying on prompt wording.
+     */
+    defaultRunMode?: SubagentRunMode;
 }
 
 export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
@@ -31,6 +38,7 @@ export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
     ollamaUrl: 'http://127.0.0.1:11434/v1',
     directUrl: 'http://127.0.0.1:8080/v1',
     defaultBackend: 'bridge',
+    defaultRunMode: 'sync',
 };
 
 export type SubagentToolMode = 'none' | 'readonly' | 'full';
@@ -446,6 +454,25 @@ function formatCatalogEntry(entry: CatalogModelEntry): string {
     return meta.length ? `${entry.canonical} (${meta.join(', ')})` : entry.canonical;
 }
 
+function formatCatalogOptions(entries: CatalogModelEntry[]): string {
+    return uniqueEntries(entries).map(formatCatalogEntry).join('; ');
+}
+
+function mergedForgeCatalogEntries(catalog: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe }): Array<{
+    name: string;
+    entries: CatalogModelEntry[];
+}> {
+    const byName = new Map<string, CatalogModelEntry[]>();
+    for (const entry of [...(catalog.control.models ?? []), ...(catalog.bridge.models ?? [])]) {
+        const list = byName.get(entry.name) ?? [];
+        list.push(entry);
+        byName.set(entry.name, list);
+    }
+    return [...byName.entries()]
+        .map(([name, entries]) => ({ name, entries: uniqueEntries(entries) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function decideForgeRoute(
     model: string,
     backends: SubagentBackends,
@@ -468,12 +495,21 @@ export function decideForgeRoute(
         return { kind: 'resolved', resolved: resolveModel(model, backends), canonical: `${backends.defaultBackend}:${name}` };
     }
 
-    const controlMatches = (catalog.control.models ?? []).filter(entry => entry.name === name);
-    if (controlMatches.length > 0) {
+    const controlMatches = uniqueEntries((catalog.control.models ?? []).filter(entry => entry.name === name));
+    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === name));
+    const allMatches = [...controlMatches, ...bridgeMatches];
+
+    if (allMatches.length > 1) {
+        return {
+            kind: 'error',
+            message: `model "${name}" is ambiguous across the Forge-exposed catalog. Retry with an explicit target. Valid options: ${formatCatalogOptions(allMatches)}`,
+        };
+    }
+
+    if (controlMatches.length === 1) {
         return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
     }
 
-    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === name));
     if (bridgeMatches.length === 1) {
         return {
             kind: 'resolved',
@@ -485,13 +521,6 @@ export function decideForgeRoute(
             },
             canonical: bridgeMatches[0].canonical,
             note: ' (via Forge bridge)',
-        };
-    }
-    if (bridgeMatches.length > 1) {
-        const options = bridgeMatches.map(formatCatalogEntry).join('; ');
-        return {
-            kind: 'error',
-            message: `model "${name}" is ambiguous in the Forge bridge catalog. Retry with an explicit target. Valid options: ${options}`,
         };
     }
 
@@ -628,40 +657,35 @@ export async function forgeHealthz(controlUrl: string): Promise<boolean> {
 export async function handleListModels(backends: SubagentBackends): Promise<string> {
     if (backends.forgeControlUrl) {
         const { control, bridge } = await fetchForgeCatalog(backends);
-        const controlNames = new Set((control.models ?? []).map(m => m.name));
-        const bridgeModels = (bridge.models ?? []).filter(m => !controlNames.has(m.name));
-
-        const controlBlock = control.ok
-            ? (control.models?.length
-                ? control.models
-                    .slice()
-                    .sort((a, b) => a.name.localeCompare(b.name))
-                    .map(m => `  ${m.name} -> ${formatCatalogEntry(m)}`)
-                    .join('\n')
-                : '  (reachable, but no local Forge control models reported)')
-            : `  DOWN: ${control.error}`;
-        const bridgeBlock = bridge.ok
-            ? (bridgeModels.length
-                ? bridgeModels
-                    .slice()
-                    .sort((a, b) => a.name.localeCompare(b.name))
-                    .map(m => `  ${m.name} -> ${formatCatalogEntry(m)}`)
-                    .join('\n')
-                : '  (reachable, but no Forge bridge-only models reported)')
-            : `  DOWN: ${bridge.error}`;
+        const merged = mergedForgeCatalogEntries({ control, bridge });
+        const mergedBlock = merged.length
+            ? merged.map(({ name, entries }) => (
+                entries.length === 1
+                    ? `  ${name} -> ${formatCatalogEntry(entries[0])}`
+                    : `  ${name} -> AMBIGUOUS: ${formatCatalogOptions(entries)}`
+            )).join('\n')
+            : '  (no Forge-exposed worker models reported)';
+        const sourceStatus = [
+            control.ok
+                ? `  Forge control UP @ ${control.baseUrl}${control.models?.length ? ` (${control.models.length} models)` : ' (0 models)'}`
+                : `  Forge control DOWN: ${control.error}`,
+            bridge.ok
+                ? `  Forge bridge UP @ ${bridge.baseUrl}${bridge.models?.length ? ` (${bridge.models.length} models)` : ' (0 models)'}`
+                : `  Forge bridge DOWN: ${bridge.error}`,
+        ].join('\n');
 
         return [
             'AVAILABLE WORKER MODELS - normal dispatch accepts the plain model name shown below.',
             '',
-            'FORGE CONTROL (local GGUF, preferred when a model is local):',
-            controlBlock,
+            'MERGED FORGE-FIRST CATALOG:',
+            mergedBlock,
             '',
-            'FORGE BRIDGE (provider-backed models and any Forge-exposed non-local route):',
-            bridgeBlock,
+            'SOURCE STATUS:',
+            sourceStatus,
             '',
             'DEBUG OVERRIDES:',
             '  Explicit route prefixes still work: forge:<model>, bridge:<model>, ollama:<model>, direct:<model>.',
-            '  Unprefixed ids resolve through the Forge-exposed catalogs first; there is no silent raw fallback.',
+            '  Unprefixed ids resolve through the Forge-exposed catalogs first; ambiguous names must be disambiguated explicitly and there is no silent raw fallback.',
         ].join('\n');
     }
 
