@@ -47,6 +47,8 @@ function parseArgs(argv) {
         claudeBin: 'claude',
         debugKeepAliveMs: 0,
         debugKeepAliveLogPayloads: false,
+        telemetryPath: '',
+        telemetry: true,
     };
     for (let i = 0; i < argv.length; i += 1) {
         const key = argv[i];
@@ -64,6 +66,8 @@ function parseArgs(argv) {
             case '--claude-bin': args.claudeBin = value; i += 1; break;
             case '--debug-keep-alive-ms': args.debugKeepAliveMs = Number(value); i += 1; break;
             case '--debug-keep-alive-log-payloads': args.debugKeepAliveLogPayloads = value !== 'false'; i += 1; break;
+            case '--telemetry-path': args.telemetryPath = value; i += 1; break;
+            case '--telemetry': args.telemetry = value !== 'false'; i += 1; break;
             default: throw new Error(`Unknown argument: ${key}`);
         }
     }
@@ -71,6 +75,9 @@ function parseArgs(argv) {
     args.eventPath = args.eventPath
         ? path.resolve(args.eventPath)
         : path.join(args.repoRoot, '.coordination', 'events.ndjson');
+    args.telemetryPath = args.telemetryPath
+        ? path.resolve(args.telemetryPath)
+        : path.join(args.repoRoot, '.coordination', 'claude-telemetry.ndjson');
     return args;
 }
 
@@ -118,7 +125,8 @@ function buildUserMessage(event, agent) {
         '[AW_TURN_TYPE: board-event]',
         `A new Forge Relay board event may require action from ${agent}.`,
         'Review it and decide whether a board reply, claim, or command acknowledgement is needed.',
-        'Use the Forge Relay MCP tools (post, claim, release, board_check, get_status, ack_command, resolve_command) to respond.',
+        'Use the Forge Relay MCP tools (post, claim, release, board_check, get_status, ack_command, resolve_command, dispatch_subagent, list_models) to respond.',
+        'For worker routing, prefer a plain Forge-exposed model name in normal use; explicit forge:/bridge:/ollama:/direct: prefixes are override/debug paths.',
         'If no action is needed, reply briefly that you are standing by. Claim files before editing.',
         '',
         `Event summary: ${summarizeEvent(event)}`,
@@ -147,6 +155,8 @@ const SYSTEM_PROMPT = [
     'For [AW_TURN_TYPE: keep-alive], do nothing: no tools, no board traffic, no file inspection, no prose, and only [AW_KEEPALIVE_OK] if the CLI requires output.',
     'Always coordinate through the Forge Relay MCP tools: claim files before editing, post progress',
     'and handoffs, and acknowledge STOP/PAUSE commands. Keep board posts to one concise ASCII line.',
+    'When dispatching workers, prefer a plain Forge-exposed model name in normal use; local models resolve through Forge control and provider-backed models resolve through the Forge bridge.',
+    'Use explicit forge:/bridge:/ollama:/direct: model prefixes only when you intentionally need an override or debugging path.',
     'Continue handling events until you receive a SESSION_END post.',
 ].join(' ');
 
@@ -182,6 +192,52 @@ function collectToolNames(value, out) {
     }
 }
 
+// Flatten a Claude CLI stream-json `result` message into a telemetry row. The
+// Claude Code headless runtime reports per-turn token + cost on the final
+// `result` event; `cache_read_input_tokens` vs `cache_creation_input_tokens` is
+// the exact observable the keep-alive cache-benefit check needs (warm cache =>
+// high cache_read, near-zero cache_creation). Defensive: any field the runtime
+// omits is recorded as null rather than crashing the bridge.
+function extractTelemetry(msg, meta) {
+    const usage = (msg && typeof msg.usage === 'object' && msg.usage) || {};
+    const num = (v) => (typeof v === 'number' ? v : null);
+    const input = num(usage.input_tokens);
+    const output = num(usage.output_tokens);
+    const cacheRead = num(usage.cache_read_input_tokens);
+    const cacheWrite = num(usage.cache_creation_input_tokens);
+    return {
+        ts: new Date().toISOString(),
+        agent: (meta && meta.agent) || 'claude',
+        turn: (meta && meta.turn) ?? null,
+        kind: (meta && meta.kind) || 'board-event',
+        trigger: (meta && meta.trigger) || '',
+        subtype: (msg && msg.subtype) ?? null,
+        is_error: (msg && msg.is_error) ?? null,
+        num_turns: num(msg && msg.num_turns),
+        duration_ms: num(msg && msg.duration_ms),
+        duration_api_ms: num(msg && msg.duration_api_ms),
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_input_tokens: cacheRead,
+        cache_creation_input_tokens: cacheWrite,
+        // Total context billed into this turn (fresh + cache-write + cache-read).
+        billed_input_tokens: [input, cacheWrite, cacheRead].some((v) => v !== null)
+            ? (input || 0) + (cacheWrite || 0) + (cacheRead || 0)
+            : null,
+        total_cost_usd: num(msg && msg.total_cost_usd),
+        session_id: (msg && msg.session_id) ?? null,
+    };
+}
+
+function appendTelemetry(filePath, record) {
+    try {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf8');
+    } catch (error) {
+        process.stderr.write(`telemetry write failed: ${error.message}\n`);
+    }
+}
+
 class ClaudeBridge {
     constructor(options) {
         this.options = options;
@@ -194,6 +250,7 @@ class ClaudeBridge {
         this.hasSeenRealTurn = false;
         this.linked = false;
         this.currentTurn = null;
+        this.turnCount = 0;
     }
 
     start() {
@@ -270,6 +327,7 @@ class ClaudeBridge {
             if (this.currentTurn && this.currentTurn.kind === 'keep-alive') {
                 process.stdout.write(`claude keep-alive result payload: ${JSON.stringify(msg)}\n`);
             }
+            this.#recordTelemetry(msg);
             this.processing = false;
             this.currentTurn = null;
             this.lastActivityAt = Date.now();
@@ -372,6 +430,30 @@ class ClaudeBridge {
         }
         process.stdout.write(`claude keep-alive stream payload: ${JSON.stringify(msg)}\n`);
     }
+
+    #recordTelemetry(msg) {
+        if (!this.options.telemetry) { return; }
+        this.turnCount += 1;
+        const turn = this.currentTurn;
+        const meta = {
+            agent: this.options.agent,
+            turn: this.turnCount,
+            kind: (turn && turn.kind) || 'board-event',
+            trigger: turn
+                ? (turn.kind === 'keep-alive' ? (turn.reason || 'keep-alive') : summarizeEvent(turn.event))
+                : '',
+        };
+        const record = extractTelemetry(msg, meta);
+        appendTelemetry(this.options.telemetryPath, record);
+        // Compact human-readable line lands in claude-bridge.log too.
+        const cost = record.total_cost_usd !== null ? `$${record.total_cost_usd.toFixed(4)}` : 'n/a';
+        process.stdout.write(
+            `claude telemetry [#${record.turn} ${record.kind}]: ` +
+            `in=${record.input_tokens ?? '?'} out=${record.output_tokens ?? '?'} ` +
+            `cache_read=${record.cache_read_input_tokens ?? '?'} cache_write=${record.cache_creation_input_tokens ?? '?'} ` +
+            `billed_in=${record.billed_input_tokens ?? '?'} cost=${cost}\n`,
+        );
+    }
 }
 
 async function main() {
@@ -393,5 +475,5 @@ if (require.main === module) {
         process.exit(1);
     });
 } else {
-    module.exports = { parseArgs, shouldTrigger, buildUserMessage, buildKeepAliveMessage, summarizeEvent, collectToolNames };
+    module.exports = { parseArgs, shouldTrigger, buildUserMessage, buildKeepAliveMessage, summarizeEvent, collectToolNames, extractTelemetry };
 }

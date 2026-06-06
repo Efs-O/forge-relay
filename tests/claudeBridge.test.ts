@@ -6,6 +6,7 @@ const {
     buildUserMessage,
     buildKeepAliveMessage,
     collectToolNames,
+    extractTelemetry,
 } = require('../scripts/claude-auto-bridge.js');
 
 test('Claude bridge parses debug keep-alive flags', () => {
@@ -34,6 +35,50 @@ test('Claude bridge keep-alive turns stay inert-by-contract', () => {
     assert.match(text, /\[AW_TURN_TYPE: keep-alive\]/);
     assert.match(text, /Do not use tools\./);
     assert.match(text, /\[AW_KEEPALIVE_OK\]/);
+});
+
+test('Claude bridge defaults telemetry on with a .coordination path', () => {
+    const args = parseArgs(['--repo-root', '.']);
+    assert.equal(args.telemetry, true);
+    assert.match(args.telemetryPath.replace(/\\/g, '/'), /\.coordination\/claude-telemetry\.ndjson$/);
+
+    const off = parseArgs(['--repo-root', '.', '--telemetry', 'false']);
+    assert.equal(off.telemetry, false);
+});
+
+test('Claude telemetry flattens a result payload and sums billed input', () => {
+    const row = extractTelemetry({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        num_turns: 2,
+        duration_ms: 4200,
+        total_cost_usd: 0.0123,
+        session_id: 'sess-1',
+        usage: {
+            input_tokens: 100,
+            output_tokens: 200,
+            cache_creation_input_tokens: 50,
+            cache_read_input_tokens: 5000,
+        },
+    }, { agent: 'claude', turn: 3, kind: 'board-event', trigger: 'worker done' });
+
+    assert.equal(row.input_tokens, 100);
+    assert.equal(row.output_tokens, 200);
+    assert.equal(row.cache_read_input_tokens, 5000);
+    assert.equal(row.cache_creation_input_tokens, 50);
+    assert.equal(row.billed_input_tokens, 5150);
+    assert.equal(row.total_cost_usd, 0.0123);
+    assert.equal(row.turn, 3);
+    assert.equal(row.kind, 'board-event');
+});
+
+test('Claude telemetry tolerates a usage-less payload', () => {
+    const row = extractTelemetry({ type: 'result', subtype: 'success' }, { kind: 'keep-alive' });
+    assert.equal(row.input_tokens, null);
+    assert.equal(row.billed_input_tokens, null);
+    assert.equal(row.total_cost_usd, null);
+    assert.equal(row.kind, 'keep-alive');
 });
 
 test('Claude bridge keep-alive payload scan surfaces tool names', () => {
