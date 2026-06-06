@@ -3,7 +3,7 @@
     "forgerelay": {
       "command": "node",
       "args": [
-        "n:/vs code apps/forge-relay/out/mcpStdio.js",
+        "c:/Users/efso office/.vscode/extensions/efsoo.forge-relay-0.3.11/out/mcpStdio.js",
         "--repoRoot",
         "n:/vs code apps/forge-relay"
       ]

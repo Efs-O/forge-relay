@@ -92,6 +92,7 @@ export interface RuntimeStatusSnapshot {
     claude: { status: RuntimeBridgeStatus; detail: string };
     roster: SessionRoster;
     claudeMode: ClaudeMode;
+    managedCodexBridge: boolean;
 }
 
 // Messages sent from extension → webview
@@ -119,7 +120,7 @@ export type WebviewMessage =
     | { type: 'newSession'; agent: string; label?: string }
     | { type: 'listSessions' }
     | { type: 'loadSession'; id: string }
-    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode }
+    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode; managedCodexBridge: boolean }
     | { type: 'disconnectSession'; agent: string }
     | { type: 'toggleAutonomy' }
     | { type: 'ready' };

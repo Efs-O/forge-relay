@@ -580,6 +580,10 @@ button.warning {
     border-radius: 12px;
 }
 
+.modal-note {
+    margin-top: 10px;
+}
+
 .roster-block h3,
 .mode-block h3 {
     margin: 0 0 8px;
@@ -599,6 +603,11 @@ button.warning {
 
 .check-row input {
     margin: 0;
+}
+
+.check-row:has(input:disabled) {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 .mode-disabled {

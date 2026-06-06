@@ -442,6 +442,8 @@ class CodexBridge {
                 'Each incoming board event may update an ongoing coordination task, not just require a reply.',
                 'When a task is assigned to `codex`, continue the coordination workflow across turns until it is completed, you are explicitly reassigned or stood down, you are genuinely blocked, or you receive SESSION_END or STOP/PAUSE.',
                 'Use the Forge Relay MCP tools directly for board_check, get_status, claim, release, post, ack_command, resolve_command, dispatch_subagent, and list_models as needed.',
+                'For worker routing, prefer a plain Forge-exposed model name in normal use; local models resolve through Forge control and provider-backed models resolve through the Forge bridge.',
+                'Use explicit forge:/bridge:/ollama:/direct: prefixes only when you intentionally need an override or a debugging path.',
                 'Do not stop after posting status if execution work is still required.',
                 'Claim files before dispatching or editing, avoid duplicate board replies, and keep board posts concise ASCII one-liners.',
             ].join(' '),

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
 import { ExtensionMessage, WebviewMessage } from './types';
-import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
+import { getNonce, getWebviewHtml, sessionStartNoticeWithCodexMode } from './webviewContent';
 
 export class BoardPanel {
     public static current: BoardPanel | undefined;
@@ -148,11 +148,15 @@ export class BoardPanel {
                     this.bridge.release(msg.agent, msg.targets, msg.note ?? '');
                     break;
                 case 'connectSession':
-                    this.runtime.setRoster(msg.roster, msg.claudeMode);
-                    this.bridge.startSession(msg.agent, { roster: msg.roster, claudeMode: msg.claudeMode });
+                    this.runtime.setRoster(msg.roster, msg.claudeMode, msg.managedCodexBridge);
+                    this.bridge.startSession(msg.agent, {
+                        roster: msg.roster,
+                        claudeMode: msg.claudeMode,
+                        managedCodexBridge: msg.managedCodexBridge,
+                    });
                     this.panel.webview.postMessage({
                         type: 'notice',
-                        message: sessionStartNotice(msg.roster, msg.claudeMode),
+                        message: sessionStartNoticeWithCodexMode(msg.roster, msg.claudeMode, msg.managedCodexBridge),
                     } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'stateUpdate', state: this.bridge.getState() } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'sessionState', session: this.bridge.getSessionState() } satisfies ExtensionMessage);
@@ -160,7 +164,7 @@ export class BoardPanel {
                     break;
                 case 'disconnectSession':
                     this.bridge.endSession(msg.agent);
-                    this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());
+                    this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode(), false);
                     this.panel.webview.postMessage({
                         type: 'notice',
                         message: 'SESSION_END posted; runtime bridges stopped.',

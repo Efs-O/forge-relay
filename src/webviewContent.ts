@@ -9,18 +9,37 @@ export function getNonce(): string {
 /** Human-readable notice describing what Connect just started, given the roster. */
 export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode): string {
     if (!roster.claude && !roster.codex) {
-        return 'No orchestrator selected — session posted but no agent will react.';
+        return 'No orchestrator selected - session posted but no agent will react.';
     }
     const parts: string[] = [];
     if (roster.codex) {
-        parts.push('Codex runtime bridge connecting');
+        parts.push('Codex expected through its own MCP session');
     }
     if (roster.claude) {
         parts.push(claudeMode === 'A'
             ? 'paste the Claude /loop prompt to start Claude'
             : 'Claude headless bridge starting');
     }
-    return `Session started — ${parts.join('; ')}.`;
+    return `Session started - ${parts.join('; ')}.`;
+}
+
+export function sessionStartNoticeWithCodexMode(
+    roster: SessionRoster,
+    claudeMode: ClaudeMode,
+    managedCodexBridge: boolean
+): string {
+    if (!roster.codex) {
+        return sessionStartNotice(roster, claudeMode);
+    }
+    const rosterWithClaude = { ...roster, codex: false };
+    const base = sessionStartNotice(rosterWithClaude, claudeMode).replace(/\.$/, '');
+    const codexNote = managedCodexBridge
+        ? 'managed Codex bridge starting (debug path)'
+        : 'Codex expected through its own MCP session';
+    if (!roster.claude) {
+        return `Session started - ${codexNote}.`;
+    }
+    return `${base}; ${codexNote}.`;
 }
 
 export function getWebviewHtml(
@@ -192,7 +211,8 @@ export function getWebviewHtml(
             <div class="roster-block">
                 <h3>Orchestrators</h3>
                 <label class="check-row"><input type="checkbox" id="roster-claude" checked> Claude</label>
-                <label class="check-row"><input type="checkbox" id="roster-codex"> Codex</label>
+                <label class="check-row"><input type="checkbox" id="roster-codex"> Codex via its own MCP session</label>
+                <p class="prompt-note modal-note">Normal Codex usage does not need Forge Relay to launch a second app-server. Select Codex here when your existing Codex session should participate on the board through the <code>forgerelay</code> MCP tools.</p>
             </div>
 
             <div class="mode-block" id="claude-mode-block">
@@ -211,9 +231,17 @@ export function getWebviewHtml(
 
             <div class="prompt-block" id="codex-info-block">
                 <div class="prompt-head">
-                    <h3>Codex</h3>
+                    <h3>Codex default path</h3>
                 </div>
-                <p class="prompt-note">Recommended: leave Codex unchecked. Codex coordinates through its own sidebar via the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code> — one process, no OAuth conflict. Checking it here makes Forge Relay spawn a <em>second</em> codex app-server, which can fight the sidebar over your single ChatGPT login and go unresponsive.</p>
+                <p class="prompt-note">Recommended: use your existing Codex sidebar/session with the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. That is the normal single-process path and avoids the OAuth/session conflict that can happen when Forge Relay spawns a second <code>codex app-server</code>.</p>
+            </div>
+
+            <div class="prompt-block" id="codex-advanced-block">
+                <div class="prompt-head">
+                    <h3>Advanced Codex debug path</h3>
+                </div>
+                <label class="check-row"><input type="checkbox" id="managed-codex-bridge"> Launch managed Codex bridge (debug only)</label>
+                <p class="prompt-note">Use this only for manual bridge testing or debugging the managed inbound path. It may interfere with the main Codex session if both use the same login.</p>
             </div>
 
             <div class="modal-actions">
