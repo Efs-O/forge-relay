@@ -1,8 +1,10 @@
 # Forge Relay
 
-**Multi-agent coordination board for VS Code.**
+**Open-source infrastructure for multi-agent software maintenance workflows.**
 
-Forge Relay lets Claude Code and Codex CLI (or any MCP-capable agent) work on the same repository in parallel — without stepping on each other. It provides file-level claims, a live event feed, operator STOP/PAUSE commands, and a persistent activity log, all visible in a VS Code sidebar panel.
+Forge Relay gives maintainers a shared control plane for coordinating coding agents on the same repository. It supports Codex, Claude, and other MCP-capable agents, with file-level claims, a live event feed, operator STOP/PAUSE controls, and a persistent activity log in VS Code.
+
+It can also route delegated work to optional local-model workers through Forge-managed or OpenAI-compatible backends, so maintainers can offload lower-cost background tasks without giving up visibility or control.
 
 ---
 
@@ -14,23 +16,28 @@ When two AI coding agents work on the same repo simultaneously, they will:
 - produce conflicting changes in shared files
 - have no way to coordinate scope or hand off work
 
-Forge Relay solves this with a lightweight local control plane: a shared MCP server that both agents connect to, and a VS Code panel where the human operator watches and controls everything in real time.
+Forge Relay solves this with a lightweight local control plane for software maintenance: a shared MCP server that agents connect to, and a VS Code panel where the maintainer can watch, coordinate, and intervene in real time.
 
 There is no database, no cloud service, no API keys required beyond what the agents already use. All state is stored in plain JSON files in a `.coordination/` folder in your workspace.
+
+This is intentionally not a Codex-only or Claude-only wrapper. Forge Relay is built to coordinate real multi-agent maintainer workflows honestly: Codex and Claude can orchestrate work on the same board, and optional local workers can take delegated subtasks when cost or throughput matters more than using a frontier model for every step.
 
 ---
 
 ## Features
 
-- **VS Code sidebar** — always-visible board panel in the Activity Bar
-- **Tab panel** — larger view via `Forge Relay: Open Board (Tab)` command
-- **MCP server** — starts automatically on port 7878 when VS Code opens
-- **Manual setup guidance** — surfaces copy-ready MCP config snippets without mutating workspace or home config
-- **File claims** — agents claim files or folders before editing; the board blocks conflicting claims
-- **TTL expiry** — claims expire automatically after 120 minutes (configurable) so a crashed agent cannot block forever
-- **Event feed** — append-only log of every claim, release, post, command, and acknowledgement
-- **STOP / PAUSE** — operator commands with agent acknowledgement flow
-- **Cross-tool** — works with any agent that supports MCP (Claude Code CLI, Codex CLI, Aider, etc.)
+- **Maintainer control plane** - one board for claims, handoffs, STOP/PAUSE, and audit trail
+- **VS Code sidebar** - always-visible board panel in the Activity Bar
+- **Tab panel** - larger view via `Forge Relay: Open Board (Tab)` command
+- **MCP server** - starts automatically on port 7878 when VS Code opens
+- **Manual setup guidance** - surfaces copy-ready MCP config snippets without mutating workspace or home config
+- **File claims** - agents claim files or folders before editing; the board blocks conflicting claims
+- **TTL expiry** - claims expire automatically after 120 minutes (configurable) so a crashed agent cannot block forever
+- **Event feed** - append-only log of every claim, release, post, command, and acknowledgement
+- **STOP / PAUSE** - operator commands with agent acknowledgement flow
+- **Codex + Claude support** - designed for mixed-agent workflows, not a single-vendor path
+- **Optional local worker offload** - route delegated tasks to Forge-managed or OpenAI-compatible local backends
+- **Cross-tool** - works with any agent that supports MCP (Claude Code CLI, Codex CLI, Aider, etc.)
 
 ---
 
@@ -38,19 +45,19 @@ There is no database, no cloud service, no API keys required beyond what the age
 
 ```
 VS Code Extension
-├── Sidebar panel (WebviewViewProvider) ─── always visible
-├── Tab panel (WebviewPanel) ──────────────── on demand, larger view
-└── MCP server (Node.js HTTP/SSE, :7878)
-        │
-        ├── Claude Code CLI ──── reads configured MCP settings, calls MCP tools
-        ├── Codex CLI ────────── reads configured MCP settings, calls MCP tools
-        └── (any MCP agent)
+|- Sidebar panel (WebviewViewProvider) --- always visible
+|- Tab panel (WebviewPanel) -------------- on demand, larger view
+\- MCP server (Node.js HTTP/SSE, :7878)
+    |
+    |- Claude Code CLI ---- reads configured MCP settings, calls MCP tools
+    |- Codex CLI ---------- reads configured MCP settings, calls MCP tools
+    \- (any MCP agent)
 
 State: .coordination/
-├── claims.json      active file/folder claims with TTL
-├── commands.json    STOP / PAUSE commands with ack tracking
-├── events.ndjson    append-only event log
-└── bridge.lock      file lock for safe concurrent writes
+|- claims.json      active file/folder claims with TTL
+|- commands.json    STOP / PAUSE commands with ack tracking
+|- events.ndjson    append-only event log
+\- bridge.lock      file lock for safe concurrent writes
 ```
 
 Both the sidebar and tab panel share the same MCP server and the same `.coordination/` state. Multiple VS Code windows on the same machine pointing to the same workspace will share state correctly via the file lock.
@@ -161,14 +168,14 @@ This proves a supported Codex inbound trigger exists. It does not by itself mean
 If you run Codex unattended through the bridge, you may see recurring errors in
 the Codex log such as `codex_apps` / `chatgpt.com/backend-api/wham/apps` timeouts
 or `ces/v1/rgstr 403`. **These come from Codex's own ChatGPT connectors/apps
-feature — they are not Forge Relay**, and our harmless `resources/list -32601`
+feature - they are not Forge Relay**, and our harmless `resources/list -32601`
 (method not found) is unrelated too. But those connector failures can make the
 IDE Codex session restart, which looks like a bridge problem.
 
 For stable unattended runs, **disable Codex's connectors/apps/plugins** (in the
 Codex/ChatGPT settings for the account Codex is signed into). The Forge Relay
 bridge needs only the `codex app-server` JSON-RPC interface and the Forge Relay
-MCP tools — none of the ChatGPT-apps connectors.
+MCP tools - none of the ChatGPT-apps connectors.
 
 ---
 
@@ -185,6 +192,21 @@ Agents call these tools natively as part of their reasoning loop. No manual rela
 | `get_status` | Get all active claims and open commands in one call. |
 | `ack_command` | Acknowledge a STOP or PAUSE command. Always call this before stopping work. |
 | `resolve_command` | Mark a command as resolved once work has stopped. |
+
+### Worker routing contract
+
+Forge Relay now treats Forge as the normal routing surface for worker models.
+
+- pass a plain Forge-exposed model name to `dispatch_subagent` in normal use
+- local Forge-managed GGUF models route through Forge control
+- provider-backed Forge-exposed models route through the Forge bridge
+- explicit `forge:` / `bridge:` / `ollama:` / `direct:` prefixes are still valid, but they are override/debug paths rather than the normal workflow
+- use `list_models` to inspect the merged Forge-first catalog before dispatching unfamiliar models
+
+In short:
+
+- normal use = plain model name
+- debugging or forced transport choice = explicit prefix
 
 ### Tool parameters
 
@@ -230,7 +252,7 @@ Add this to your agent's system prompt or `SHARED_AGENT_PROMPT.md`:
 
 ```
 Before starting any substantial edit or build:
-1. Call board_check — if BLOCKED, call ack_command and stop.
+1. Call board_check - if BLOCKED, call ack_command and stop.
 2. Call claim on the files you are about to edit.
 3. Do your work.
 4. Call post to report progress or blockers.
@@ -265,6 +287,11 @@ For Claude Code, add a pre-tool hook to enforce the pre-flight check automatical
 |---|---|---|
 | `forgeRelay.port` | `7878` | MCP server port. Change if 7878 is already in use. |
 | `forgeRelay.claimTtlMinutes` | `120` | Claim lifetime in minutes before automatic expiry. |
+| `forgeRelay.subagentForgeControlUrl` | `""` | Optional Forge control URL. When set, plain worker model names resolve through Forge-first routing. |
+| `forgeRelay.subagentBridgeUrl` | `http://127.0.0.1:9099/v1` | Forge bridge endpoint for provider-backed or bridge-routed worker models. |
+| `forgeRelay.subagentBridgeApiKey` | `""` | API key for the Forge bridge, if required. |
+| `forgeRelay.subagentOllamaUrl` | `http://127.0.0.1:11434/v1` | Raw Ollama override endpoint. Use mainly for debugging or forced routing. |
+| `forgeRelay.subagentDirectUrl` | `http://127.0.0.1:8080/v1` | Raw llama.cpp override endpoint. Use mainly for debugging or forced routing. |
 
 ---
 
@@ -299,7 +326,7 @@ The original PowerShell scripts are still included in `scripts/` for compatibili
 | Script | Usage |
 |---|---|
 | `scripts/agent-bridge.ps1` | Direct state mutations (claim, release, post, history...) |
-| `scripts/agent-watch.ps1` | Pre-flight check — exit 0 clear, exit 2 blocked |
+| `scripts/agent-watch.ps1` | Pre-flight check - exit 0 clear, exit 2 blocked |
 | `scripts/agent-board.ps1` | Standalone HTTP board server on port 8765 (without VS Code) |
 
 These write to the same `.coordination/` state files so they are fully compatible with the MCP server.
@@ -308,7 +335,7 @@ These write to the same `.coordination/` state files so they are fully compatibl
 
 ## License
 
-MIT — use it, fork it, publish it, sell it.
+MIT - use it, fork it, publish it, sell it.
 
 ---
 
@@ -317,6 +344,6 @@ MIT — use it, fork it, publish it, sell it.
 - [ ] WebSocket push instead of 2s polling
 - [ ] Folder-level claim conflict detection (parent/child path overlap)
 - [ ] Build hook wrappers (auto-claim before `dotnet build`, auto-post result)
-- [ ] Session snapshots — periodic markdown export of current split and open blockers
+- [ ] Session snapshots - periodic markdown export of current split and open blockers
 - [ ] Task cards with blocker state and severity tags
 - [ ] VS Code Marketplace publish

@@ -1,12 +1,12 @@
 # Forge control-client — consumer implementation spec
 
-**Goal:** route AgentWatch worker dispatch through Forge's localhost model-control
+**Goal:** route Forge Relay worker dispatch through Forge's localhost model-control
 API so the **right model is loaded and warm before we dispatch**, instead of
 POSTing blind to a fixed port. This kills the two failures seen in the RPS run:
 `fetch failed` (server down / mid-swap) and "wrong model loaded" (the `direct`
 backend serves whatever is loaded and ignores the requested id).
 
-This work lives **entirely in this repo (AgentWatch)**. You only need the
+This work lives **entirely in this repo (Forge Relay)**. You only need the
 contract below — there is no dependency on, and no path into, Forge's source.
 
 ---
@@ -78,9 +78,9 @@ config. Default base URL: **`http://127.0.0.1:8799`** (Forge's
       instead of probing the worker endpoint directly.)
 
 ### 4. Config surface
-- [x] Expose `forgeControlUrl` in AgentWatch settings (VS Code config and/or the
+- [x] Expose `forgeControlUrl` in Forge Relay settings (VS Code config and/or the
       MCP server's backend config), defaulting unset/off.
-      (`agentwatch.subagentForgeControlUrl` and `AGENTWATCH_FORGE_CONTROL_URL`.)
+      (`forgeRelay.subagentForgeControlUrl` and `FORGERELAY_FORGE_CONTROL_URL`.)
 
 ---
 
@@ -98,7 +98,7 @@ several different models.
      enabled: true
      port: 8799
    ```
-2. **AgentWatch**: set `forgeControlUrl: http://127.0.0.1:8799`.
+2. **Forge Relay**: set `forgeControlUrl: http://127.0.0.1:8799`.
 3. Dispatch 3-4 workers on the **same** model via the Forge route. Expected:
    - first `/ensure` loads it; the rest return the same `baseUrl` instantly;
    - all four share one VRAM load (fan across the `--parallel` slots);
