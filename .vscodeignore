@@ -16,6 +16,7 @@ tsconfig.json
 *.vsix
 **/*.md
 !README.md
+!CHANGELOG.md
 .coordination/**
 .claude/**
 .claude.disabled/**

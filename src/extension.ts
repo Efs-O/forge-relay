@@ -257,7 +257,7 @@ function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number
         '',
         '- Ships extension-owned UI metadata such as icons and commands.',
         '- Starts the local Forge Relay MCP server when VS Code opens the workspace.',
-        '- Includes repo-owned helper scripts such as `npm run codex:auto`.',
+        '- Maintains the workspace `.mcp.json` entry when a Claude Mode A orchestrator is started (Mode A only).',
         '',
         '## What you still need to configure manually on each machine',
         '',

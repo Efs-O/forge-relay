@@ -85,7 +85,7 @@ code --extensionDevelopmentPath="/path/to/forge-relay" "/path/to/your/workspace"
 
 ## Agent Setup
 
-Forge Relay does not write MCP config into your workspace or home directory.
+Forge Relay does not write MCP config into your workspace or home directory during activation. (One scoped exception: starting a Claude **Mode A** orchestrator maintains the `forgerelay` entry in the workspace `.mcp.json`, so the orchestrator it spawns can find its tools.)
 
 Use **Command Palette -> Forge Relay: Show MCP Config** to view the exact snippets for this machine.
 Use **Command Palette -> Forge Relay: Verify Setup** to check whether this machine is ready.
@@ -109,8 +109,16 @@ Codex typically uses `~/.codex/config.toml`:
 ```toml
 [mcp_servers.forgerelay]
 command = "node"
-args = ["/absolute/path/to/forge-relay/out/mcpStdio.js", "--repoRoot", "/absolute/path/to/forge-relay"]
+args = ["/absolute/path/to/extension/out/mcpStdio.js"]
 ```
+
+Do **not** add a hardwired `--repoRoot` argument to this global entry — Codex
+resolves the board from each workspace's working directory, and a fixed
+`--repoRoot` would make every Codex workspace write to the same board.
+`Forge Relay: Verify Setup` flags this misconfiguration. (For an installed
+extension, the `out/mcpStdio.js` path lives in the extension folder, e.g.
+`~/.vscode/extensions/efsoo.forge-relay-<version>/out/mcpStdio.js` — run
+`Forge Relay: Show MCP Config` to get the exact path for your machine.)
 
 Claude Code reads `settings.json` style config files. In this environment the observed locations are:
 
@@ -296,7 +304,7 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 
 ## PowerShell Scripts (Legacy)
 
-The original PowerShell scripts are still included in `scripts/` for compatibility and for use with agents that cannot connect via MCP:
+The original PowerShell scripts remain available in the [GitHub repository](https://github.com/Efs-O/forge-relay) under `scripts/` for debugging and for agents that cannot connect via MCP (they are not bundled into the installed extension):
 
 | Script | Usage |
 |---|---|
