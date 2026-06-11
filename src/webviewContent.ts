@@ -23,25 +23,6 @@ export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode
     return `Session started - ${parts.join('; ')}.`;
 }
 
-export function sessionStartNoticeWithCodexMode(
-    roster: SessionRoster,
-    claudeMode: ClaudeMode,
-    managedCodexBridge: boolean
-): string {
-    if (!roster.codex) {
-        return sessionStartNotice(roster, claudeMode);
-    }
-    const rosterWithClaude = { ...roster, codex: false };
-    const base = sessionStartNotice(rosterWithClaude, claudeMode).replace(/\.$/, '');
-    const codexNote = managedCodexBridge
-        ? 'managed Codex bridge starting (debug path)'
-        : 'Codex expected through its own MCP session';
-    if (!roster.claude) {
-        return `Session started - ${codexNote}.`;
-    }
-    return `${base}; ${codexNote}.`;
-}
-
 export function getWebviewHtml(
     webview: vscode.Webview,
     extensionUri: vscode.Uri,
@@ -231,17 +212,9 @@ export function getWebviewHtml(
 
             <div class="prompt-block" id="codex-info-block">
                 <div class="prompt-head">
-                    <h3>Codex default path</h3>
+                    <h3>Codex path</h3>
                 </div>
-                <p class="prompt-note">Recommended: use your existing Codex sidebar/session with the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. That is the normal single-process path and avoids the OAuth/session conflict that can happen when Forge Relay spawns a second <code>codex app-server</code>.</p>
-            </div>
-
-            <div class="prompt-block" id="codex-advanced-block">
-                <div class="prompt-head">
-                    <h3>Advanced Codex debug path</h3>
-                </div>
-                <label class="check-row"><input type="checkbox" id="managed-codex-bridge"> Launch managed Codex bridge (debug only)</label>
-                <p class="prompt-note">Use this only for manual bridge testing or debugging the managed inbound path. It may interfere with the main Codex session if both use the same login.</p>
+                <p class="prompt-note">Codex joins through its own session with the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Forge Relay never launches a Codex process: a second <code>codex app-server</code> on the same ChatGPT login gets its OAuth token revoked and kills both sessions.</p>
             </div>
 
             <div class="modal-actions">

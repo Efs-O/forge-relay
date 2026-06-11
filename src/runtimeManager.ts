@@ -9,19 +9,15 @@ export interface RuntimeAgentSnapshot {
 }
 
 export interface RuntimeSnapshot {
-    codex: RuntimeAgentSnapshot;
     claude: RuntimeAgentSnapshot;
     roster: SessionRoster;
     claudeMode: ClaudeMode;
-    managedCodexBridge: boolean;
 }
 
 export interface RuntimeManagerOptions {
-    /** Absolute path to scripts/codex-auto-bridge.js */
-    codexScriptPath: string;
     /** Absolute path to scripts/claude-auto-bridge.js */
     claudeScriptPath: string;
-    /** Absolute path to out/mcpStdio.js, used to bind Codex to this workspace's board. */
+    /** Absolute path to out/mcpStdio.js, used by the Mode A .mcp.json self-heal. */
     mcpStdioPath: string;
     /** SSE URL of the Forge Relay MCP server, attached to the headless Claude bridge. */
     mcpUrl: string;
@@ -49,21 +45,21 @@ export interface RuntimeManagerOptions {
 }
 
 /**
- * Owns the per-agent runtime bridges and fans their status changes out to any
- * number of listeners (the status-bar item and each open webview).
+ * Owns the Claude runtime bridge and fans its status changes out to any number
+ * of listeners (the status-bar item and each open webview).
  *
- *  - Codex: supervised app-server bridge (P2).
  *  - Claude Mode A: the user's own interactive /loop session — no managed
  *    process, so the Claude bridge stays inactive.
  *  - Claude Mode B: supervised headless Claude Agent SDK bridge (P4).
+ *  - Codex: NEVER spawned by Relay. Two codex app-servers on one ChatGPT OAuth
+ *    login trip token_revoked server-side and kill both sessions, so Codex only
+ *    participates via the forgerelay MCP entry in its own ~/.codex/config.toml.
  */
 export class RuntimeManager {
-    private readonly codex: ScriptRuntimeBridge;
     private readonly claude: ScriptRuntimeBridge;
     private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
     private roster: SessionRoster = { claude: false, codex: false };
     private claudeMode: ClaudeMode = 'A';
-    private managedCodexBridge = false;
     /** Absolute path to this extension build's out/mcpStdio.js (resolved from
      *  context.extensionUri at activation, so it always points at the *current*
      *  install — this is what makes the Mode A config self-healing). */
@@ -75,18 +71,6 @@ export class RuntimeManager {
         this.mcpStdioPath = opts.mcpStdioPath;
         this.repoRoot = opts.repoRoot;
         this.onLog = opts.onLog;
-        const codexArgs = ['--mcp-stdio-path', opts.mcpStdioPath, '--mcp-repo-root', opts.repoRoot];
-        this.codex = new ScriptRuntimeBridge({
-            agent: 'codex',
-            scriptPath: opts.codexScriptPath,
-            repoRoot: opts.repoRoot,
-            eventsPath: opts.eventsPath,
-            nodePath: opts.nodePath,
-            extraArgs: codexArgs,
-            linkedPattern: /codex thread started/i,
-            onStatus: () => this.emit(),
-            onLog: opts.onLog,
-        });
 
         // Attach the Forge Relay MCP server. Mode defaults to the orchestrator
         // policy (react to the operator + @mentions, not peer chatter).
@@ -122,11 +106,9 @@ export class RuntimeManager {
 
     getSnapshot(): RuntimeSnapshot {
         return {
-            codex: { status: this.codex.status(), detail: this.codex.detailText() },
             claude: { status: this.claude.status(), detail: this.claude.detailText() },
             roster: { ...this.roster },
             claudeMode: this.claudeMode,
-            managedCodexBridge: this.managedCodexBridge,
         };
     }
 
@@ -139,21 +121,14 @@ export class RuntimeManager {
     }
 
     /**
-     * Apply the orchestrator selection chosen at Connect (plan §2.4). Only the
-     * selected agents get a runtime bridge; the unselected one stays inactive.
-     * The Claude headless bridge runs only for selected + Mode B; Mode A is the
-     * user's own /loop paste (no managed process).
+     * Apply the orchestrator selection chosen at Connect (plan §2.4). The Claude
+     * headless bridge runs only for selected + Mode B; Mode A is the user's own
+     * /loop paste (no managed process). roster.codex is informational only —
+     * Codex joins via its own MCP session, never a Relay-spawned process.
      */
-    setRoster(roster: SessionRoster, claudeMode: ClaudeMode, managedCodexBridge = false): void {
+    setRoster(roster: SessionRoster, claudeMode: ClaudeMode): void {
         this.roster = { ...roster };
         this.claudeMode = claudeMode;
-        this.managedCodexBridge = managedCodexBridge;
-
-        if (roster.codex && this.managedCodexBridge) {
-            this.codex.start();
-        } else {
-            this.codex.stop();
-        }
 
         if (roster.claude && claudeMode === 'B') {
             this.claude.start();
@@ -222,28 +197,13 @@ export class RuntimeManager {
         }
     }
 
-    connectCodex(): void {
-        this.roster.codex = true;
-        this.managedCodexBridge = true;
-        this.codex.start();
-        this.emit();
-    }
-
-    disconnectCodex(): void {
-        this.managedCodexBridge = false;
-        this.codex.stop();
-        this.emit();
-    }
-
     /** Whether any managed runtime is currently active (or trying to be). */
     isAnyActive(): boolean {
-        return this.codex.status() !== 'inactive' || this.claude.status() !== 'inactive';
+        return this.claude.status() !== 'inactive';
     }
 
     stopAll(): void {
         this.roster = { claude: false, codex: false };
-        this.managedCodexBridge = false;
-        this.codex.stop();
         this.claude.stop();
     }
 

@@ -1,5 +1,16 @@
 # Forge Relay — Worker System-Prompt Collision Fix (Relay-side plan)
 
+> **OBSOLETE — 2026-06-11.** The Forge repo removed the entire Python bridge
+> (`app.py`, `bridge.yaml`, `bridge_mode`) in its 2026-06 refactor (see Forge
+> `BRIDGE_REMOVAL.md`); `BackendPool`/`DirectBackend` replaced it. The injecting
+> component this plan was written against no longer exists, so the caller-wins
+> fix (§3) and the Forge-side work (§5) are moot. The only piece that shipped is
+> §4.1/§4.2: `systemPrompt()` in `src/subagentLoop.ts` now carries a non-empty
+> guard and `tests/workerSystemPrompt.test.ts` locks the invariant — kept as
+> generic hardening against ANY serving layer that injects on missing system
+> messages. Relatedly, Relay's `subagentBridgeUrl` default was emptied (the
+> `:9099` endpoint is gone) and `bridge:` routing is now opt-in.
+
 Status: PLAN ONLY — for user review. No code changes until approved.
 Owner: claude (forge-relay repo). Companion plan: Forge repo (`app.py` caller-wins +
 `bridge.yaml` refactor) owned by claude-code.

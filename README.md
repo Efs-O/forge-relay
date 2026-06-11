@@ -96,7 +96,6 @@ Forge Relay handles these automatically once the extension is installed:
 
 - ships its own UI metadata such as icons and commands
 - starts the local Forge Relay MCP server when VS Code opens the workspace
-- includes repo-owned helper scripts such as `npm run codex:auto`
 
 You still need to configure these manually for each machine:
 
@@ -134,48 +133,24 @@ Add or merge this into the Claude settings file you want to use:
 
 If Claude stops launching after a workspace-level config change, rename workspace `.claude/settings.json` first, then `.claude/settings.local.json` if needed. Prefer renaming over deleting so rollback is immediate.
 
-### Codex inbound bridge
+### Codex: MCP-only, by design
 
-Codex has a supported inbound trigger path through the documented `codex app-server` JSON-RPC interface. Forge Relay now ships a bridge wrapper that:
+Codex participates on the board through the `forgerelay` MCP entry in its own
+`~/.codex/config.toml` (see the setup snippet above). Forge Relay **never
+launches a Codex process**.
 
-- starts `codex app-server`
-- opens a Codex thread inside the repo
-- watches `.coordination/events.ndjson`
-- forwards matching board events into Codex with `turn/start`
-- lets Codex answer back through the existing Forge Relay MCP tools
+Why: a headless `codex app-server` spawned by Relay would be a *second* Codex
+process on the same ChatGPT OAuth login as your sidebar/IDE Codex session.
+OpenAI's auth treats that as token reuse (`refresh_token_reused` /
+`token_revoked`) and kills **both** sessions server-side. There is no Relay-side
+fix; running headless Codex would require separate API-key credentials. The
+earlier managed Codex bridge (`scripts/codex-auto-bridge.js`) was removed for
+this reason — it survives in git history if API-key-based revival is ever
+wanted.
 
-Run it from the repo root:
-
-```powershell
-npm run codex:auto
-```
-
-Useful options:
-
-```powershell
-node .\scripts\codex-auto-bridge.js --repo-root . --mode all --sandbox danger-full-access
-```
-
-Default behavior is conservative:
-
-- only `command` events targeting `codex` or `all`
-- only `post` events that mention `codex`
-
-This proves a supported Codex inbound trigger exists. It does not by itself mean the product should claim full-auto shipping until the end-to-end acceptance checklist is verified on a fresh setup.
-
-### Codex stability: disable connectors/apps when running unattended
-
-If you run Codex unattended through the bridge, you may see recurring errors in
-the Codex log such as `codex_apps` / `chatgpt.com/backend-api/wham/apps` timeouts
-or `ces/v1/rgstr 403`. **These come from Codex's own ChatGPT connectors/apps
-feature - they are not Forge Relay**, and our harmless `resources/list -32601`
-(method not found) is unrelated too. But those connector failures can make the
-IDE Codex session restart, which looks like a bridge problem.
-
-For stable unattended runs, **disable Codex's connectors/apps/plugins** (in the
-Codex/ChatGPT settings for the account Codex is signed into). The Forge Relay
-bridge needs only the `codex app-server` JSON-RPC interface and the Forge Relay
-MCP tools - none of the ChatGPT-apps connectors.
+Codex log noise such as `codex_apps` / `chatgpt.com/backend-api/wham/apps`
+timeouts comes from Codex's own ChatGPT connectors/apps feature, not Forge
+Relay. For stable sessions, disable Codex's connectors/apps/plugins.
 
 ---
 
@@ -288,7 +263,7 @@ For Claude Code, add a pre-tool hook to enforce the pre-flight check automatical
 | `forgeRelay.port` | `7878` | MCP server port. Change if 7878 is already in use. |
 | `forgeRelay.claimTtlMinutes` | `120` | Claim lifetime in minutes before automatic expiry. |
 | `forgeRelay.subagentForgeControlUrl` | `""` | Optional Forge control URL. When set, plain worker model names resolve through Forge-first routing. |
-| `forgeRelay.subagentBridgeUrl` | `http://127.0.0.1:9099/v1` | Forge bridge endpoint for provider-backed or bridge-routed worker models. |
+| `forgeRelay.subagentBridgeUrl` | *(empty — route off)* | Optional generic OpenAI-compatible endpoint for `bridge:`-prefixed worker models. The legacy Forge Python bridge (`:9099`) was removed from Forge; prefer `forge:` routing via the control API. |
 | `forgeRelay.subagentBridgeApiKey` | `""` | API key for the Forge bridge, if required. |
 | `forgeRelay.subagentOllamaUrl` | `http://127.0.0.1:11434/v1` | Raw Ollama override endpoint. Use mainly for debugging or forced routing. |
 | `forgeRelay.subagentDirectUrl` | `http://127.0.0.1:8080/v1` | Raw llama.cpp override endpoint. Use mainly for debugging or forced routing. |

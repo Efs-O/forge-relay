@@ -8,8 +8,13 @@ import { Bridge } from './bridge';
  * just needs one of these endpoints up (Decision #4, decoupled).
  */
 export interface SubagentBackends {
-    /** continue-llamacpp-bridge, OpenAI-compatible, API-keyed (default target). */
-    bridgeUrl: string;   // e.g. http://127.0.0.1:9099/v1
+    /**
+     * Optional generic OpenAI-compatible endpoint (API-keyed). Historically the
+     * Forge Python bridge at :9099; that bridge was REMOVED from Forge in the
+     * 2026-06 refactor (see Forge BRIDGE_REMOVAL.md), so this is now empty by
+     * default and the `bridge:` route is opt-in for any custom endpoint.
+     */
+    bridgeUrl: string;   // e.g. http://127.0.0.1:9099/v1 — '' = route off
     /** Ollama native daemon, OpenAI-compat surface. */
     ollamaUrl: string;   // e.g. http://127.0.0.1:11434/v1
     /** llama.cpp llama-server direct. */
@@ -34,10 +39,10 @@ export interface SubagentBackends {
 }
 
 export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
-    bridgeUrl: 'http://127.0.0.1:9099/v1',
+    bridgeUrl: '',
     ollamaUrl: 'http://127.0.0.1:11434/v1',
     directUrl: 'http://127.0.0.1:8080/v1',
-    defaultBackend: 'bridge',
+    defaultBackend: 'ollama',
     defaultRunMode: 'sync',
 };
 
@@ -381,10 +386,12 @@ export interface ForgeCatalogProbe {
  */
 export async function listModels(backends: SubagentBackends): Promise<BackendModels[]> {
     const targets: Array<{ backend: BackendModels['backend']; baseUrl: string; apiKey?: string }> = [
-        { backend: 'bridge', baseUrl: backends.bridgeUrl, apiKey: backends.bridgeApiKey },
         { backend: 'ollama', baseUrl: backends.ollamaUrl },
         { backend: 'direct', baseUrl: backends.directUrl },
     ];
+    if (backends.bridgeUrl) {
+        targets.unshift({ backend: 'bridge', baseUrl: backends.bridgeUrl, apiKey: backends.bridgeApiKey });
+    }
     if (backends.forgeControlUrl) {
         targets.unshift({ backend: 'forge', baseUrl: backends.forgeControlUrl });
     }
@@ -420,7 +427,14 @@ export async function fetchForgeCatalog(backends: SubagentBackends): Promise<{ c
             }
         })();
 
-    const bridge = await (async (): Promise<ForgeCatalogProbe> => {
+    const bridge = !backends.bridgeUrl
+        ? {
+            backend: 'forge-bridge' as const,
+            baseUrl: '',
+            ok: false,
+            error: 'bridge route is off (subagentBridgeUrl is unset; the legacy Forge Python bridge at :9099 was removed from Forge).',
+        }
+        : await (async (): Promise<ForgeCatalogProbe> => {
         try {
             return {
                 backend: 'forge-bridge',
@@ -483,7 +497,11 @@ export function decideForgeRoute(
     if (!name) { return { kind: 'error', message: 'worker model id is empty.' }; }
 
     if (prefix === 'bridge' || prefix === 'ollama' || prefix === 'direct') {
-        return { kind: 'resolved', resolved: resolveModel(model, backends), canonical: `${prefix}:${name}` };
+        const resolved = resolveModel(model, backends);
+        if (!resolved.baseUrl) {
+            return { kind: 'error', message: `"${prefix}:" routing requested but its endpoint URL is not configured (set forgeRelay.subagent${prefix === 'bridge' ? 'Bridge' : prefix === 'ollama' ? 'Ollama' : 'Direct'}Url). Note the legacy Forge Python bridge (:9099) was removed from Forge — prefer "forge:" routing via the control API.` };
+        }
+        return { kind: 'resolved', resolved, canonical: `${prefix}:${name}` };
     }
     if (prefix === 'forge') {
         if (!backends.forgeControlUrl) {
@@ -492,7 +510,11 @@ export function decideForgeRoute(
         return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
     }
     if (!backends.forgeControlUrl) {
-        return { kind: 'resolved', resolved: resolveModel(model, backends), canonical: `${backends.defaultBackend}:${name}` };
+        const resolved = resolveModel(model, backends);
+        if (!resolved.baseUrl) {
+            return { kind: 'error', message: `default backend "${backends.defaultBackend}" has no endpoint URL configured. Set forgeRelay.subagentForgeControlUrl (recommended) or an explicit backend URL.` };
+        }
+        return { kind: 'resolved', resolved, canonical: `${backends.defaultBackend}:${name}` };
     }
 
     const controlMatches = uniqueEntries((catalog.control.models ?? []).filter(entry => entry.name === name));
@@ -533,6 +555,9 @@ export function decideForgeRoute(
 
 /** Check whether the resolved backend is reachable (connection-level) before dispatch. */
 export async function validateBackend(resolved: ResolvedModel): Promise<{ reachable: boolean; message: string; models?: string[] }> {
+    if (!resolved.baseUrl) {
+        return { reachable: false, message: `${resolved.backend} backend has no endpoint URL configured (the legacy Forge Python bridge was removed; prefer "forge:" routing via forgeRelay.subagentForgeControlUrl).` };
+    }
     try {
         const models = await fetchModels(resolved.baseUrl, resolved.backend, resolved.apiKey);
         return { reachable: true, message: '', models };

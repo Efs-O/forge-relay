@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
 import { BoardState, ExtensionMessage, WebviewMessage } from './types';
-import { getNonce, getWebviewHtml, sessionStartNoticeWithCodexMode } from './webviewContent';
+import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
 export class BoardViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewId = 'forgeRelay.boardView';
@@ -159,18 +159,16 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                     this.bridge.release(msg.agent, msg.targets, msg.note ?? '');
                     break;
                 case 'connectSession': {
-                    // P3: apply the chosen roster. Only selected orchestrators get a
-                    // agents participate in the session; the managed Codex bridge
-                    // is an explicit debug option rather than the default path.
-                    this.runtime.setRoster(msg.roster, msg.claudeMode, msg.managedCodexBridge);
+                    // P3: apply the chosen roster. Only selected agents participate
+                    // in the session; Codex joins via its own MCP session.
+                    this.runtime.setRoster(msg.roster, msg.claudeMode);
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
-                        managedCodexBridge: msg.managedCodexBridge,
                     });
                     this.post({
                         type: 'notice',
-                        message: sessionStartNoticeWithCodexMode(msg.roster, msg.claudeMode, msg.managedCodexBridge),
+                        message: sessionStartNotice(msg.roster, msg.claudeMode),
                     });
                     this.post({ type: 'stateUpdate', state: this.bridge.getState() });
                     this.post({ type: 'sessionState', session: this.bridge.getSessionState() });
@@ -179,7 +177,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                 }
                 case 'disconnectSession':
                     this.bridge.endSession(msg.agent);
-                    this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode(), false);
+                    this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());
                     this.post({ type: 'notice', message: 'SESSION_END posted; runtime bridges stopped.' });
                     this.post({ type: 'sessionState', session: this.bridge.getSessionState() });
                     this.post({ type: 'runtimeStatus', runtime: this.runtime.getSnapshot() });

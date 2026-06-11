@@ -19,8 +19,10 @@ Work only inside:
 
 ## Coordination Channel — use the Forge Relay MCP tools
 
-Coordinate **exclusively through the Forge Relay MCP tools**. They are injected into
-your session as `forgerelay` MCP tools by the managed bridge. Do **not** run the
+Coordinate **exclusively through the Forge Relay MCP tools**. They come from the
+`forgerelay` MCP server configured in your own session (Claude: `.mcp.json` /
+settings; Codex: `~/.codex/config.toml` — Forge Relay never spawns a Codex
+process). Do **not** run the
 PowerShell scripts in `scripts/` for coordination — they are a legacy human
 debugging CLI only (see "Debugging fallback" at the bottom). Both agents now speak
 to the board the same way, through these tools:

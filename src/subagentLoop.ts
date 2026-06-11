@@ -45,7 +45,13 @@ export interface WorkerLoopResult {
 
 const MAX_STEPS_DEFAULT = 12;
 
-function systemPrompt(autonomy: string): string {
+/**
+ * Worker system prompt. Contract: this must ALWAYS return a non-empty string —
+ * every worker dispatch sends it as messages[0], so the serving side never has
+ * to invent role instructions for a worker. Exported for the regression test
+ * that locks this invariant (tests/workerSystemPrompt.test.ts).
+ */
+export function systemPrompt(autonomy: string): string {
     const capability = autonomy === 'clanker'
         ? 'You may read, search, write, edit, and run commands. Destructive commands are refused automatically.'
         : 'You are in DRAFT mode: read and search freely, but you cannot write directly — use propose_diff to suggest changes for the orchestrator to apply.';
@@ -72,8 +78,12 @@ export async function runWorkerLoop(
 ): Promise<WorkerLoopResult> {
     const maxSteps = opts.maxSteps ?? MAX_STEPS_DEFAULT;
     const tools = workerToolSchemas(ctx.autonomy);
+    const sys = systemPrompt(ctx.autonomy);
+    if (!sys.trim()) {
+        throw new Error('worker system prompt resolved empty — refusing to dispatch a worker without role instructions');
+    }
     const messages: Array<Record<string, unknown>> = [
-        { role: 'system', content: systemPrompt(ctx.autonomy) },
+        { role: 'system', content: sys },
         { role: 'user', content: context ? `${task}\n\nContext:\n${context}` : task },
     ];
 

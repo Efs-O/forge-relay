@@ -24,11 +24,9 @@ const connectModal = /** @type {HTMLElement} */ (document.getElementById('connec
 const promptClaude = /** @type {HTMLElement} */ (document.getElementById('prompt-claude'));
 const rosterClaude = /** @type {HTMLInputElement} */ (document.getElementById('roster-claude'));
 const rosterCodex = /** @type {HTMLInputElement} */ (document.getElementById('roster-codex'));
-const managedCodexBridge = /** @type {HTMLInputElement} */ (document.getElementById('managed-codex-bridge'));
 const claudePromptBlock = /** @type {HTMLElement} */ (document.getElementById('claude-prompt-block'));
 const claudeModeBlock = /** @type {HTMLElement} */ (document.getElementById('claude-mode-block'));
 const codexInfoBlock = /** @type {HTMLElement} */ (document.getElementById('codex-info-block'));
-const codexAdvancedBlock = /** @type {HTMLElement} */ (document.getElementById('codex-advanced-block'));
 
 /** @type {any[]}*/
 let latestEvents = [];
@@ -41,13 +39,9 @@ const EVENT_MESSAGE_PREVIEW_CHARS = 700;
 let currentSessionState = null;
 let shouldAutoScroll = true;
 /** @type {{ status: string, detail: string }} */
-let codexRuntime = { status: 'inactive', detail: 'Not connected.' };
-/** @type {{ status: string, detail: string }} */
 let claudeRuntime = { status: 'inactive', detail: 'Not connected.' };
 /** @type {'A'|'B'} */
 let currentClaudeMode = 'A';
-/** @type {boolean} */
-let currentManagedCodexBridge = false;
 /** @type {{ claude: any, codex: any }} */
 let lastPresence = { claude: null, codex: null };
 /** @type {{ claude: boolean, codex: boolean } | null} */
@@ -95,11 +89,9 @@ window.addEventListener('message', (/** @type {MessageEvent} */ event) => {
         }
     }
     if (msg.type === 'runtimeStatus') {
-        codexRuntime = msg.runtime.codex;
         claudeRuntime = msg.runtime.claude;
         currentRoster = msg.runtime.roster;
         currentClaudeMode = msg.runtime.claudeMode;
-        currentManagedCodexBridge = Boolean(msg.runtime.managedCodexBridge);
         // Re-render both cards so bridge status + roster greying show immediately.
         if (lastPresence.codex) {
             renderAgentCard('codex', lastPresence.codex, currentSessionState ?? undefined);
@@ -183,13 +175,9 @@ function renderAgentCard(agent, presence, session) {
 
     // Surface the actual activation path alongside board presence.
     if (agent === 'codex') {
-        if (currentRoster?.codex && currentManagedCodexBridge) {
-            detailText += ` · Managed bridge: ${codexRuntime.status}`;
-        } else if (currentRoster?.codex) {
-            detailText += ' · Board path: own MCP session';
-        } else {
-            detailText += ' · Managed bridge: off';
-        }
+        detailText += currentRoster?.codex
+            ? ' · Board path: own MCP session'
+            : ' · Not in session';
     } else if (agent === 'claude' && currentClaudeMode === 'B') {
         detailText += ` · Managed bridge: ${claudeRuntime.status}`;
     } else if (agent === 'claude' && currentRoster?.claude) {
@@ -312,13 +300,6 @@ function updateModalVisibility() {
     claudeModeBlock?.classList.toggle('hidden', !claudeOn);
     claudePromptBlock?.classList.toggle('hidden', !(claudeOn && mode === 'A'));
     codexInfoBlock?.classList.remove('hidden');
-    codexAdvancedBlock?.classList.remove('hidden');
-    if (managedCodexBridge) {
-        managedCodexBridge.disabled = !(rosterCodex?.checked ?? false);
-        if (!(rosterCodex?.checked ?? false)) {
-            managedCodexBridge.checked = false;
-        }
-    }
 }
 
 function selectedClaudeMode() {
@@ -473,9 +454,6 @@ document.getElementById('btn-connect')?.addEventListener('click', () => {
         rosterClaude.checked = Boolean(currentRoster.claude);
         rosterCodex.checked = Boolean(currentRoster.codex);
     }
-    if (managedCodexBridge) {
-        managedCodexBridge.checked = currentManagedCodexBridge;
-    }
     updateModalVisibility();
     connectModal.classList.remove('hidden');
     connectModal.setAttribute('aria-hidden', 'false');
@@ -498,14 +476,12 @@ document.getElementById('btn-confirm-connect')?.addEventListener('click', () => 
         agent: agent(),
         roster,
         claudeMode: selectedClaudeMode(),
-        managedCodexBridge: roster.codex && (managedCodexBridge?.checked ?? false),
     });
     closeModal();
 });
 
 rosterClaude?.addEventListener('change', updateModalVisibility);
 rosterCodex?.addEventListener('change', updateModalVisibility);
-managedCodexBridge?.addEventListener('change', updateModalVisibility);
 for (const radio of document.querySelectorAll('input[name="claude-mode"]')) {
     radio.addEventListener('change', updateModalVisibility);
 }

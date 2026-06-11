@@ -42,11 +42,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const bridge = new Bridge(repoRoot);
     bridge.ensureAutonomyDefault(config.get<'draft' | 'clanker'>('defaultAutonomy', 'draft'));
     mcpServer = new McpServer(bridge, {
-        bridgeUrl: config.get<string>('subagentBridgeUrl', 'http://127.0.0.1:9099/v1').trim(),
+        bridgeUrl: config.get<string>('subagentBridgeUrl', '').trim(),
         ollamaUrl: config.get<string>('subagentOllamaUrl', 'http://127.0.0.1:11434/v1').trim(),
         directUrl: config.get<string>('subagentDirectUrl', 'http://127.0.0.1:8080/v1').trim(),
         bridgeApiKey: config.get<string>('subagentBridgeApiKey', '').trim() || undefined,
-        defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'bridge'),
+        defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'ollama'),
         forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
         defaultRunMode: config.get<'sync' | 'async'>('subagentDefaultMode', 'sync'),
     });
@@ -67,13 +67,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // the stdio server all agree on a single coordination dir.
     const eventsPath = bridge.getEventsPath();
 
-    // P2: supervised runtime bridges (Codex app-server wakeup, productized from
-    // the old `npm run codex:auto`). The status bar item reflects the dot.
+    // Supervised Claude runtime bridge (Mode B). The status bar item reflects
+    // its status; Codex is never spawned by Relay (see RuntimeManager docs).
     const runtimeStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    runtimeStatusBar.command = 'forgeRelay.toggleCodexBridge';
+    runtimeStatusBar.command = 'forgeRelay.openBoard';
 
     runtimeManager = new RuntimeManager({
-        codexScriptPath: path.join(context.extensionUri.fsPath, 'scripts', 'codex-auto-bridge.js'),
         claudeScriptPath: path.join(context.extensionUri.fsPath, 'scripts', 'claude-auto-bridge.js'),
         mcpStdioPath: path.join(context.extensionUri.fsPath, 'out', 'mcpStdio.js'),
         mcpUrl: `http://127.0.0.1:${port}/sse`,
@@ -90,12 +89,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const renderStatusBar = (): void => {
         const snap = rm.getSnapshot();
-        // Lead with the most "active" bridge so the bar reflects the live wakeup path.
-        const lead = snap.codex.status !== 'inactive' ? { name: 'Codex', ...snap.codex }
-            : snap.claude.status !== 'inactive' ? { name: 'Claude', ...snap.claude }
-            : { name: 'Codex', ...snap.codex };
-        runtimeStatusBar.text = `$(${statusBarIcon(lead.status)}) Forge Relay: ${lead.name} ${lead.status}`;
-        runtimeStatusBar.tooltip = `Managed Codex bridge - ${snap.codex.detail}\nClaude bridge - ${snap.claude.detail}\nClick to ${rm.isAnyActive() ? 'disconnect the managed Codex bridge' : 'connect the managed Codex bridge'}.`;
+        runtimeStatusBar.text = `$(${statusBarIcon(snap.claude.status)}) Forge Relay: Claude ${snap.claude.status}`;
+        runtimeStatusBar.tooltip = `Claude bridge - ${snap.claude.detail}\nClick to open the board.`;
         runtimeStatusBar.show();
     };
     rm.onChange((snapshot) => {
@@ -104,7 +99,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void context.workspaceState.update(ROSTER_KEY, {
             roster: snapshot.roster,
             claudeMode: snapshot.claudeMode,
-            managedCodexBridge: snapshot.managedCodexBridge,
         });
     });
     renderStatusBar();
@@ -118,12 +112,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Restore the previous session roster so selected bridges auto-reconnect
     // after a window reload (survives restart, per P2/P3).
-    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode; managedCodexBridge?: boolean }>(ROSTER_KEY);
+    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode }>(ROSTER_KEY);
     if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex)) {
-        // Single-process codex policy: never auto-spawn a managed Codex bridge on
-        // restore. If Codex was selected for the session, keep it selected so the
-        // board UI reflects that intent, but force the managed bridge off.
-        rm.setRoster({ ...savedSession.roster }, savedSession.claudeMode ?? 'A', false);
+        rm.setRoster({ ...savedSession.roster }, savedSession.claudeMode ?? 'A');
     }
 
     context.subscriptions.push(
@@ -151,16 +142,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 : 'Forge Relay: Draft mode — workers are read-only and propose diffs for review.');
             boardViewProvider.postAutonomy(next);
             BoardPanel.current?.postAutonomy(next);
-        }),
-
-        vscode.commands.registerCommand('forgeRelay.toggleCodexBridge', () => {
-            if (rm.getSnapshot().codex.status === 'inactive') {
-                rm.connectCodex();
-                vscode.window.setStatusBarMessage('Forge Relay: managed Codex bridge connecting...', 4000);
-            } else {
-                rm.disconnectCodex();
-                vscode.window.setStatusBarMessage('Forge Relay: managed Codex bridge disconnected.', 4000);
-            }
         }),
 
         vscode.commands.registerCommand('forgeRelay.showMcpConfig', () => {

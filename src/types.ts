@@ -84,15 +84,14 @@ export interface SessionRoster {
 }
 
 // Mode A = interactive /loop paste (the user's own Claude chat); Mode B = headless
-// SDK bridge (P4). Codex always uses its productized runtime bridge.
+// SDK bridge (P4). Codex participates via its own MCP session — Relay never
+// spawns a Codex process (two app-servers on one ChatGPT login trip token_revoked).
 export type ClaudeMode = 'A' | 'B';
 
 export interface RuntimeStatusSnapshot {
-    codex: { status: RuntimeBridgeStatus; detail: string };
     claude: { status: RuntimeBridgeStatus; detail: string };
     roster: SessionRoster;
     claudeMode: ClaudeMode;
-    managedCodexBridge: boolean;
 }
 
 // Messages sent from extension → webview
@@ -120,7 +119,7 @@ export type WebviewMessage =
     | { type: 'newSession'; agent: string; label?: string }
     | { type: 'listSessions' }
     | { type: 'loadSession'; id: string }
-    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode; managedCodexBridge: boolean }
+    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode }
     | { type: 'disconnectSession'; agent: string }
     | { type: 'toggleAutonomy' }
     | { type: 'ready' };

@@ -74,10 +74,6 @@
         "title": "Forge Relay: Verify Setup"
       },
       {
-        "command": "forgeRelay.toggleCodexBridge",
-        "title": "Forge Relay: Connect/Disconnect Managed Codex Runtime Bridge (Debug)"
-      },
-      {
         "command": "forgeRelay.toggleClanker",
         "title": "Forge Relay: Toggle Clanker Mode (worker write/edit/run)"
       }
@@ -133,8 +129,8 @@
         },
         "forgeRelay.subagentBridgeUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:9099/v1",
-          "description": "OpenAI-compatible base URL for the continue-llamacpp-bridge backend used by dispatch_subagent (model id selects the GGUF)."
+          "default": "",
+          "description": "Optional generic OpenAI-compatible base URL for the 'bridge:' route of dispatch_subagent. Empty (default) = route off. The legacy Forge Python bridge this used to point at (http://127.0.0.1:9099/v1) was removed from Forge in the 2026-06 refactor; prefer 'forge:' routing via subagentForgeControlUrl."
         },
         "forgeRelay.subagentOllamaUrl": {
           "type": "string",
@@ -166,7 +162,7 @@
         },
         "forgeRelay.subagentDefaultBackend": {
           "type": "string",
-          "default": "bridge",
+          "default": "ollama",
           "enum": [
             "bridge",
             "ollama",
@@ -197,7 +193,6 @@
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.js",
-    "codex:auto": "node scripts/codex-auto-bridge.js --repo-root .",
     "probe:xmlnl": "node scripts/xml-nl-probe.js"
   },
   "devDependencies": {
