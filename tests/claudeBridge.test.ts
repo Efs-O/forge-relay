@@ -20,6 +20,14 @@ test('Claude bridge parses debug keep-alive flags', () => {
     assert.equal(args.debugKeepAliveLogPayloads, true);
 });
 
+test('Claude bridge keep-alive defaults to a bounded ping cap', () => {
+    const defaults = parseArgs(['--repo-root', '.']);
+    assert.equal(defaults.keepAliveMaxPings, 3);
+
+    const overridden = parseArgs(['--repo-root', '.', '--keep-alive-max-pings', '0']);
+    assert.equal(overridden.keepAliveMaxPings, 0);
+});
+
 test('Claude bridge board-event turns are explicitly tagged', () => {
     const msg = buildUserMessage({ type: 'post', agent: 'user', message: 'check in' }, 'claude');
     const text = msg.message.content[0].text;

@@ -83,6 +83,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         claudePermissionMode: config.get<string>('claudePermissionMode', 'acceptEdits').trim() || undefined,
         claudeModel: config.get<string>('claudeModel', '').trim() || undefined,
         claudeKeepAliveMs: config.get<number>('claudeKeepAliveMs', 0),
+        claudeKeepAliveMaxPings: config.get<number>('claudeKeepAliveMaxPings', 3),
         onLog: (line) => { log(`[bridge] ${line}`); console.log('[forgerelay:bridge]', line); },
     });
     const rm = runtimeManager;

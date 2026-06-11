@@ -69,7 +69,7 @@ Both the sidebar and tab panel share the same MCP server and the same `.coordina
 Requirements: Node.js 18+, VS Code 1.100+
 
 ```powershell
-git clone https://github.com/Efsoo/forge-relay
+git clone https://github.com/Efs-O/forge-relay
 cd forge-relay
 npm install
 npm run build
@@ -78,7 +78,7 @@ npm run build
 Then press **F5** in VS Code to open the Extension Development Host, or run:
 
 ```powershell
-code --extensionDevelopmentPath="N:\vs code apps\forge-relay" "C:\path\to\your\workspace"
+code --extensionDevelopmentPath="/path/to/forge-relay" "/path/to/your/workspace"
 ```
 
 ---
@@ -105,19 +105,19 @@ You still need to configure these manually for each machine:
 
 Reason: Forge Relay intentionally does not silently edit user home config or workspace agent settings during activation.
 
-Codex uses `C:\Users\efso office\.codex\config.toml`:
+Codex typically uses `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.forgerelay]
 command = "node"
-args = ["N:/vs code apps/forge-relay/out/mcpStdio.js", "--repoRoot", "N:/vs code apps/forge-relay"]
+args = ["/absolute/path/to/forge-relay/out/mcpStdio.js", "--repoRoot", "/absolute/path/to/forge-relay"]
 ```
 
 Claude Code reads `settings.json` style config files. In this environment the observed locations are:
 
-- `C:\Users\efso office\.claude\settings.json`
-- `N:\vs code apps\forge-relay\.claude\settings.json`
-- `N:\vs code apps\forge-relay\.claude\settings.local.json`
+- `~/.claude/settings.json`
+- `<workspace>/.claude/settings.json`
+- `<workspace>/.claude/settings.local.json`
 
 Add or merge this into the Claude settings file you want to use:
 
@@ -335,7 +335,7 @@ These write to the same `.coordination/` state files so they are fully compatibl
 
 ## License
 
-MIT - use it, fork it, publish it, sell it.
+Licensed under Apache-2.0. See [LICENSE](LICENSE) for details.
 
 ---
 

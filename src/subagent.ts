@@ -723,10 +723,28 @@ const TIER1_SYSTEM_PROMPT = [
 
 const WORKER_POST_MAX_CHARS = 8 * 1024;
 let workerOrdinal = 0;
+let activeWorkerRuns = 0;
 
 export function nextWorkerOrdinal(): number {
     workerOrdinal += 1;
     return workerOrdinal;
+}
+
+/**
+ * Reserve the next worker number for a live worker run. Once the current batch
+ * fully drains, the next batch starts back at worker-1.
+ */
+export function beginWorkerRun(): number {
+    if (activeWorkerRuns === 0) {
+        workerOrdinal = 0;
+    }
+    activeWorkerRuns += 1;
+    return nextWorkerOrdinal();
+}
+
+/** Release one live worker so a drained batch can restart numbering. */
+export function endWorkerRun(): void {
+    activeWorkerRuns = Math.max(0, activeWorkerRuns - 1);
 }
 
 function workerAgentName(model: string, ordinal?: number): string {
@@ -759,17 +777,17 @@ export async function dispatchSubagentTier1(
     resolvedOverride?: ResolvedModel,
 ): Promise<DispatchResult> {
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const worker = workerAgentName(opts.model, nextWorkerOrdinal());
+    const worker = workerAgentName(opts.model, beginWorkerRun());
     const resolved = resolvedOverride ?? resolveModel(opts.model, backends);
 
-    bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] (${resolved.backend}:${resolved.model}): ${opts.task}`));
-
-    const messages: ChatMessage[] = [
-        { role: 'system', content: TIER1_SYSTEM_PROMPT },
-        { role: 'user', content: opts.context ? `${opts.task}\n\nContext:\n${opts.context}` : opts.task },
-    ];
-
     try {
+        bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] (${resolved.backend}:${resolved.model}): ${opts.task}`));
+
+        const messages: ChatMessage[] = [
+            { role: 'system', content: TIER1_SYSTEM_PROMPT },
+            { role: 'user', content: opts.context ? `${opts.task}\n\nContext:\n${opts.context}` : opts.task },
+        ];
+
         const result = await chatCompletion(resolved, messages);
         bridge.post(worker, formatWorkerPost(`done [${subagentId.slice(0, 10)}]: ${result}`));
         return { subagentId, status: 'completed', result };
@@ -777,6 +795,8 @@ export async function dispatchSubagentTier1(
         const error = err instanceof Error ? err.message : String(err);
         bridge.post(worker, formatWorkerPost(`error [${subagentId.slice(0, 10)}]: ${error}`));
         return { subagentId, status: 'error', error };
+    } finally {
+        endWorkerRun();
     }
 }
 

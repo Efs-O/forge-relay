@@ -46,6 +46,7 @@ function parseArgs(argv) {
         model: '',
         claudeBin: 'claude',
         debugKeepAliveMs: 0,
+        keepAliveMaxPings: 3,
         debugKeepAliveLogPayloads: false,
         telemetryPath: '',
         telemetry: true,
@@ -65,6 +66,7 @@ function parseArgs(argv) {
             case '--model': args.model = value; i += 1; break;
             case '--claude-bin': args.claudeBin = value; i += 1; break;
             case '--debug-keep-alive-ms': args.debugKeepAliveMs = Number(value); i += 1; break;
+            case '--keep-alive-max-pings': args.keepAliveMaxPings = Number(value); i += 1; break;
             case '--debug-keep-alive-log-payloads': args.debugKeepAliveLogPayloads = value !== 'false'; i += 1; break;
             case '--telemetry-path': args.telemetryPath = value; i += 1; break;
             case '--telemetry': args.telemetry = value !== 'false'; i += 1; break;
@@ -251,6 +253,10 @@ class ClaudeBridge {
         this.linked = false;
         this.currentTurn = null;
         this.turnCount = 0;
+        // Consecutive keep-alive pings fired since the last real board event.
+        // Bounded by options.keepAliveMaxPings so an idle session stops pinging
+        // (and lets the prompt cache go cold) instead of billing forever.
+        this.keepAliveStreak = 0;
     }
 
     start() {
@@ -387,10 +393,21 @@ class ClaudeBridge {
         if (!this.options.debugKeepAliveMs || this.options.debugKeepAliveMs <= 0) { return; }
         if (!this.hasSeenRealTurn || this.processing) { return; }
         if (this.queue.some((item) => item.kind === 'keep-alive')) { return; }
+        // Stop pinging once the streak hits the cap: an idle session should let
+        // its cache expire, not bill ~1.7c/ping indefinitely. A real board event
+        // resets keepAliveStreak (see #flushQueue), re-arming the warm window.
+        if (this.options.keepAliveMaxPings > 0 && this.keepAliveStreak >= this.options.keepAliveMaxPings) {
+            if (this.keepAliveStreak === this.options.keepAliveMaxPings) {
+                this.keepAliveStreak += 1; // bump past cap so this log fires only once
+                process.stdout.write(`keep-alive cap reached (${this.options.keepAliveMaxPings}); pausing pings until next board event\n`);
+            }
+            return;
+        }
         if (Date.now() - this.lastActivityAt < this.options.debugKeepAliveMs) { return; }
         this.queue.push({ kind: 'keep-alive', reason: 'debug-idle-threshold' });
+        this.keepAliveStreak += 1;
         this.lastActivityAt = Date.now();
-        process.stdout.write(`queued debug keep-alive after ${this.options.debugKeepAliveMs}ms idle\n`);
+        process.stdout.write(`queued debug keep-alive (${this.keepAliveStreak}/${this.options.keepAliveMaxPings}) after ${this.options.debugKeepAliveMs}ms idle\n`);
     }
 
     #flushQueue() {
@@ -408,6 +425,7 @@ class ClaudeBridge {
                 this.child.stdin.write(JSON.stringify(buildKeepAliveMessage()) + '\n');
             } else {
                 this.hasSeenRealTurn = true;
+                this.keepAliveStreak = 0; // real activity re-arms the warm window
                 process.stdout.write(`forwarding event to claude: ${summarizeEvent(turn.event)}\n`);
                 this.child.stdin.write(JSON.stringify(buildUserMessage(turn.event, this.options.agent)) + '\n');
             }

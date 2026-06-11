@@ -1,8 +1,8 @@
 {
   "name": "forge-relay",
   "displayName": "Forge Relay",
-  "description": "Multi-agent coordination board for Claude Code and Codex CLI — live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.3.15",
+  "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
+  "version": "0.3.18",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "icon": "media/forge-relay-logo-128.png",
@@ -126,6 +126,11 @@
           "default": 0,
           "description": "Cache keep-alive interval (ms) for the headless Claude (Mode B) bridge. When > 0, the bridge sends an inert no-op turn after this much board idle to keep the prompt cache warm across the ~5-minute TTL. 0 disables it (rely on natural activity). For an A/B test set this just under the TTL, e.g. 240000 (4 min)."
         },
+        "forgeRelay.claudeKeepAliveMaxPings": {
+          "type": "number",
+          "default": 3,
+          "description": "Max consecutive keep-alive pings the Claude (Mode B) bridge sends while the board is idle before it pauses. Each real board event resets the count, re-arming the warm window. This caps idle cost: without it the bridge pings forever (e.g. ~$1.40 over a 4-hour idle tail). 0 = unbounded (the old runaway behavior — not recommended)."
+        },
         "forgeRelay.subagentBridgeUrl": {
           "type": "string",
           "default": "http://127.0.0.1:9099/v1",
@@ -154,8 +159,8 @@
             "async"
           ],
           "enumDescriptions": [
-            "Blocks until the worker finishes and returns its result inline — best for quick tasks; folds the worker output into the orchestrator's context.",
-            "Fires the worker in the background and returns immediately; the worker posts progress/result to the board and @mentions the orchestrator when done — best for parallel fan-out (e.g. the 8-worker run)."
+            "Blocks until the worker finishes and returns its result inline - best for quick tasks; folds the worker output into the orchestrator's context.",
+            "Fires the worker in the background and returns immediately; the worker posts progress/result to the board and @mentions the orchestrator when done - best for parallel fan-out (e.g. the 8-worker run)."
           ],
           "description": "Default run mode for dispatch_subagent when the orchestrator does not specify `mode`. The orchestrator can still override per-call. Set to 'async' to make parallel background dispatch the default."
         },
@@ -172,7 +177,7 @@
         "forgeRelay.subagentForgeControlUrl": {
           "type": "string",
           "default": "",
-          "description": "Opt-in Forge model-control API base (e.g. http://127.0.0.1:8799). When set, dispatch_subagent routes unprefixed (and 'forge:'-prefixed) models through Forge, which loads the requested model on demand, waits until it is healthy, and returns its endpoint — eliminating 'fetch failed' / wrong-model errors. Leave empty to keep the direct bridge/ollama/direct routing."
+          "description": "Opt-in Forge model-control API base (e.g. http://127.0.0.1:8799). When set, dispatch_subagent routes unprefixed (and 'forge:'-prefixed) models through Forge, which loads the requested model on demand, waits until it is healthy, and returns its endpoint - eliminating 'fetch failed' / wrong-model errors. Leave empty to keep the direct bridge/ollama/direct routing."
         },
         "forgeRelay.defaultAutonomy": {
           "type": "string",
@@ -181,7 +186,7 @@
             "draft",
             "clanker"
           ],
-          "description": "Initial worker autonomy. 'draft' = workers are read-only and propose diffs (safe). 'clanker' = workers may write/edit/run directly, bounded by the destructive-command denylist. Toggle live with the 💥 board pill or the Toggle Clanker Mode command."
+          "description": "Initial worker autonomy. 'draft' = workers are read-only and propose diffs (safe). 'clanker' = workers may write/edit/run directly, bounded by the destructive-command denylist. Toggle live with the board pill or the Toggle Clanker Mode command."
         }
       }
     }

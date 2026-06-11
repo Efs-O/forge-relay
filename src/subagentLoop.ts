@@ -2,7 +2,7 @@ import { spawnSync } from 'child_process';
 import { Bridge } from './bridge';
 import {
     chatCompletionRaw, dispatchSubagentTier1, ResolvedModel,
-    SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote, nextWorkerOrdinal, formatWorkerPost,
+    SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote, beginWorkerRun, endWorkerRun, formatWorkerPost,
     decideForgeRoute, fetchForgeCatalog, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
 import { forgeHolds, forgeSlots } from './forgeHold';
@@ -184,7 +184,14 @@ export async function handleDispatchSubagent(
     const context = args.context !== undefined ? String(args.context) : undefined;
     const mode = String(args.mode ?? backends.defaultRunMode ?? 'sync') === 'async' ? 'async' : 'sync';
 
-    const worker = workerAgentName(model, nextWorkerOrdinal());
+    let workerRunReleased = false;
+    const finishWorkerRun = () => {
+        if (!workerRunReleased) {
+            workerRunReleased = true;
+            endWorkerRun();
+        }
+    };
+    const worker = workerAgentName(model, beginWorkerRun());
 
     // Resolve the worker endpoint and a teardown hook. The Forge route (opt-in,
     // forgeControlUrl set or a "forge:" prefix) asks Forge to load the model and
@@ -210,6 +217,7 @@ export async function handleDispatchSubagent(
     let acquireSlot: () => Promise<() => void> = async () => () => { /* no-op */ };
 
     if (route.kind === 'error') {
+        finishWorkerRun();
         return `SUBAGENT not dispatched (${model}) - ${route.message}`;
     }
     if (route.kind === 'forge-control') {
@@ -217,6 +225,7 @@ export async function handleDispatchSubagent(
         if (!(await forgeHealthz(controlUrl))) {
             const msg = `Forge control API not reachable at ${controlUrl} — is Forge running with control_server.enabled?`;
             bridge.post(worker, formatWorkerPost(`not dispatched (${model}): ${msg}`));
+            finishWorkerRun();
             return `SUBAGENT not dispatched (${model}) — ${msg}`;
         }
         try {
@@ -232,6 +241,7 @@ export async function handleDispatchSubagent(
             // 404 unknown / 409 busy / 502 load error all arrive as clear messages.
             const msg = err instanceof Error ? err.message : String(err);
             bridge.post(worker, formatWorkerPost(`not dispatched (${model}): ${msg}`));
+            finishWorkerRun();
             return `SUBAGENT not dispatched (${model}) — ${msg}`;
         }
         // Bound same-model fan-out to the slot count; the (N+1)th worker queues
@@ -245,6 +255,7 @@ export async function handleDispatchSubagent(
         resolved = route.resolved;
         const probe = await validateBackend(resolved);
         if (!probe.reachable) {
+            finishWorkerRun();
             return `SUBAGENT not dispatched (${model}) — ${probe.message}`;
         }
         modelNote = route.note ?? modelRoutingNote(resolved, probe.models);
@@ -261,6 +272,7 @@ export async function handleDispatchSubagent(
         } finally {
             slot();
             await release();
+            finishWorkerRun();
         }
     }
 
@@ -338,6 +350,11 @@ export async function handleDispatchSubagent(
             // finished, errored, or aborted. Runs once for both sync and async, since
             // runWork wraps the entire worker run in either mode (no-op off the route).
             await release();
+            // Worker-numbering discipline: mark this run finished so activeWorkerRuns
+            // can drain to zero and the next batch restarts at worker-1. Lives in
+            // runWork's finally so it fires when the work actually completes — for
+            // async that's in the background, not when the dispatch call returns.
+            finishWorkerRun();
         }
     };
 

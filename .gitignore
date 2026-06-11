@@ -3,6 +3,9 @@ out/
 .coordination/
 *.vsix
 __pycache__/
+.mcp.json
+.vscode/settings.json
+.claude/settings.json
 docs/AGENT_COORDINATION.md
 docs/AUTO_TRIGGER_AND_SUBAGENTS_PLAN.md
 docs/BOARD_INFO.md

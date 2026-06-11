@@ -38,6 +38,13 @@ export interface RuntimeManagerOptions {
      * no-op turn after this much idle to keep the prompt cache warm. 0 = off.
      */
     claudeKeepAliveMs?: number;
+    /**
+     * Max consecutive keep-alive pings to send while idle before pausing (passed
+     * through as `--keep-alive-max-pings`). A real board event resets the count.
+     * Bounds the idle cache-warming cost; the bridge defaults to 3. 0 = unbounded
+     * (the old runaway behavior — not recommended).
+     */
+    claudeKeepAliveMaxPings?: number;
     onLog?: (line: string) => void;
 }
 
@@ -92,6 +99,9 @@ export class RuntimeManager {
         }
         if (opts.claudeKeepAliveMs && opts.claudeKeepAliveMs > 0) {
             claudeArgs.push('--debug-keep-alive-ms', String(opts.claudeKeepAliveMs));
+        }
+        if (typeof opts.claudeKeepAliveMaxPings === 'number' && opts.claudeKeepAliveMaxPings >= 0) {
+            claudeArgs.push('--keep-alive-max-pings', String(opts.claudeKeepAliveMaxPings));
         }
         this.claude = new ScriptRuntimeBridge({
             agent: 'claude',

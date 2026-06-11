@@ -23,6 +23,57 @@ function spawnCli(bin, args, opts) {
     return spawn(bin, args, { ...opts, shell: false });
 }
 
+// Opus 4.8 published rates (USD per 1M tokens). Codex is NOT Anthropic-billed; per
+// the operator's choice we price Codex coordination at the SAME rates as Opus so
+// Run C is directly comparable to Runs A/B. The resulting cost is an
+// "Opus-equivalent" estimate, not what Codex actually costs. OpenAI/Codex has no
+// separate cache-write charge, so only uncached-input, cache-read, and output are
+// priced (cacheWrite kept for shape parity / future use).
+const CODEX_PRICE_PER_MTOK = { input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 6.25 };
+
+function finiteNum(v) {
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+// Codex app-server reports token usage on `turn/completed`, but the exact field
+// names shift between codex versions. Probe the known shapes and also return the
+// raw object so nothing is lost if a name is unrecognized. Defensive: any field the
+// runtime omits is recorded as null rather than crashing the bridge.
+function extractCodexUsage(params) {
+    const u = (params && (params.usage
+        || (params.turn && params.turn.usage)
+        || (params.result && params.result.usage)
+        || (params.info && params.info.usage))) || {};
+    const inputTotal = finiteNum(u.input_tokens) ?? finiteNum(u.inputTokens) ?? finiteNum(u.prompt_tokens);
+    const cached = finiteNum(u.cached_input_tokens) ?? finiteNum(u.cache_read_input_tokens)
+        ?? finiteNum(u.cacheReadInputTokens) ?? finiteNum(u.cached_tokens);
+    const output = finiteNum(u.output_tokens) ?? finiteNum(u.outputTokens) ?? finiteNum(u.completion_tokens);
+    const total = finiteNum(u.total_tokens) ?? finiteNum(u.totalTokens);
+    return { inputTotal, cached, output, total, raw: u };
+}
+
+// Opus-equivalent cost for one Codex turn. Codex `input_tokens` typically INCLUDES
+// the cached portion, so uncached = inputTotal − cached (priced at full input);
+// cached is priced at the cheap cache-read rate; output at the output rate.
+function codexCostUsd(usage) {
+    const cached = usage.cached ?? 0;
+    const inputTotal = usage.inputTotal ?? 0;
+    const uncached = Math.max(0, inputTotal - cached);
+    const output = usage.output ?? 0;
+    return (uncached * CODEX_PRICE_PER_MTOK.input
+        + cached * CODEX_PRICE_PER_MTOK.cacheRead
+        + output * CODEX_PRICE_PER_MTOK.output) / 1_000_000;
+}
+
+function appendCodexTelemetry(filePath, record) {
+    try {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf8');
+    } catch (error) {
+        process.stderr.write(`codex telemetry write failed: ${error.message}\n`);
+    }
+}
+
 function parseArgs(argv) {
     const args = {
         agent: 'codex',
@@ -37,6 +88,8 @@ function parseArgs(argv) {
         port: 8781,
         repoRoot: process.cwd(),
         sandbox: 'danger-full-access',
+        telemetry: true,
+        telemetryPath: '',
         turnTimeoutMs: 120000,
     };
 
@@ -92,6 +145,14 @@ function parseArgs(argv) {
                 args.sandbox = value;
                 i += 1;
                 break;
+            case '--telemetry':
+                args.telemetry = value !== 'false';
+                i += 1;
+                break;
+            case '--telemetry-path':
+                args.telemetryPath = value;
+                i += 1;
+                break;
             default:
                 throw new Error(`Unknown argument: ${key}`);
         }
@@ -107,6 +168,11 @@ function parseArgs(argv) {
     args.eventPath = args.eventPath
         ? path.resolve(args.eventPath)
         : path.join(args.repoRoot, '.coordination', 'events.ndjson');
+    if (args.telemetry && !args.telemetryPath) {
+        args.telemetryPath = path.join(args.repoRoot, '.coordination', 'codex-telemetry.ndjson');
+    } else if (args.telemetryPath) {
+        args.telemetryPath = path.resolve(args.telemetryPath);
+    }
     return args;
 }
 
@@ -298,6 +364,10 @@ class CodexBridge {
         this.rpc = null;
         this.activeTurn = null;
         this.shuttingDown = false;
+        // Telemetry: per-turn token usage + Opus-equivalent cost (see codexCostUsd).
+        this.turnCount = 0;
+        this.cumulativeCostUsd = 0;
+        this.loggedUsageShape = false;
     }
 
     async start() {
@@ -593,6 +663,7 @@ class CodexBridge {
             } else {
                 process.stdout.write('codex completed turn without final answer text\n');
             }
+            this.#recordTelemetry(message.params);
             this.activeTurn.resolve();
             return;
         }
@@ -601,12 +672,54 @@ class CodexBridge {
             this.activeTurn.reject(new Error(JSON.stringify(message.params)));
         }
     }
+
+    // Flatten a completed Codex turn into a telemetry row mirroring the Claude
+    // bridge's claude-telemetry.ndjson, so Runs A/B/C share one analysis shape.
+    // Cost is priced at Opus 4.8 rates (see codexCostUsd) — an Opus-equivalent
+    // estimate, since Codex is not Anthropic-billed.
+    #recordTelemetry(params) {
+        if (!this.options.telemetry || !this.options.telemetryPath) { return; }
+        const usage = extractCodexUsage(params);
+        // First turn: surface the raw usage shape so the field mapping can be
+        // verified/corrected against the real codex protocol version.
+        if (!this.loggedUsageShape) {
+            this.loggedUsageShape = true;
+            process.stdout.write(`codex usage shape (first turn): ${JSON.stringify(usage.raw)}\n`);
+        }
+        const cost = codexCostUsd(usage);
+        this.cumulativeCostUsd += cost;
+        this.turnCount += 1;
+        const uncached = usage.inputTotal != null
+            ? Math.max(0, usage.inputTotal - (usage.cached ?? 0))
+            : null;
+        const event = this.activeTurn && this.activeTurn.event;
+        const record = {
+            ts: new Date().toISOString(),
+            agent: this.options.agent,
+            turn: this.turnCount,
+            kind: 'board-event',
+            trigger: event ? summarizeEvent(event) : '',
+            input_tokens: uncached,
+            output_tokens: usage.output,
+            cache_read_input_tokens: usage.cached,
+            cache_creation_input_tokens: null, // OpenAI/Codex has no cache-write charge
+            total_tokens: usage.total,
+            cost_usd: cost,
+            cumulative_cost_usd: this.cumulativeCostUsd,
+            priced_as: 'opus-4-8-equivalent',
+            raw_usage: usage.raw,
+        };
+        appendCodexTelemetry(this.options.telemetryPath, record);
+    }
 }
 
 async function main() {
     const options = parseArgs(process.argv.slice(2));
     teeToLogFile(options.eventPath, 'codex-bridge.log', 'codex');
     process.stdout.write(`codex bridge: tailing board ${options.eventPath} (repoRoot=${options.repoRoot})\n`);
+    if (options.telemetry) {
+        process.stdout.write(`codex telemetry → ${options.telemetryPath} (priced at Opus-4.8-equivalent rates)\n`);
+    }
     emitStatus('waiting');
     const bridge = new CodexBridge(options);
 
@@ -628,7 +741,11 @@ async function main() {
     await bridge.start();
 }
 
-main().catch((error) => {
-    process.stderr.write(`${error.stack || error.message}\n`);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch((error) => {
+        process.stderr.write(`${error.stack || error.message}\n`);
+        process.exit(1);
+    });
+} else {
+    module.exports = { parseArgs, shouldTrigger, summarizeEvent, extractCodexUsage, codexCostUsd };
+}
