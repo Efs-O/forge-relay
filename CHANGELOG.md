@@ -7,8 +7,11 @@ All notable changes to the Forge Relay extension.
 - Fixed the streamable-HTTP MCP transport: `POST /mcp` handed the raw request
   Buffer to the SDK, so every request failed with "Invalid JSON-RPC message"
   (clients had to fall back to SSE). The body is now parsed before dispatch,
-  with a proper `-32700` JSON-RPC error for malformed JSON, locked by an
-  end-to-end regression test.
+  with a proper `-32700` JSON-RPC error for malformed JSON. Also fixed
+  streamable session registration (it raced the SDK's initialize handling, so
+  every follow-up request failed "Server not initialized"); sessions now
+  register via the SDK's `onsessioninitialized` callback. Both locked by
+  end-to-end regression tests (initialize → tools/list on one session).
 - Removed the managed Codex bridge entirely. Codex participates on the board
   MCP-only via its own `~/.codex/config.toml`; a Relay-spawned headless Codex
   on a ChatGPT OAuth login triggers server-side token revocation and cannot be

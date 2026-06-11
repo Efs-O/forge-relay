@@ -399,8 +399,18 @@ export class McpServer {
             return this.streamableSessions.get(sessionId)!;
         }
 
+        // transport.sessionId is only assigned while the SDK handles the
+        // *initialize* request — i.e. after this function returns. Registering
+        // the session right after connect() therefore always saw undefined and
+        // the map stayed empty, so every follow-up request landed on a fresh
+        // transport and died with "Server not initialized". Register through the
+        // SDK's onsessioninitialized callback instead, which fires with the real id.
+        let session: StreamableSession;
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => crypto.randomUUID(),
+            onsessioninitialized: (sid: string) => {
+                this.streamableSessions.set(sid, session);
+            },
         });
         transport.onclose = () => {
             if (transport.sessionId) {
@@ -411,11 +421,7 @@ export class McpServer {
         const server = this.buildMcpServer();
         await server.connect(transport);
 
-        const session = { server, transport };
-        if (transport.sessionId) {
-            this.streamableSessions.set(transport.sessionId, session);
-        }
-
+        session = { server, transport };
         return session;
     }
 
