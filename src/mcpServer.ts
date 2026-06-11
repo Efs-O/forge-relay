@@ -94,8 +94,25 @@ export class McpServer {
                 const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
                 if (req.method === 'POST') {
+                    // The SDK's handleRequest expects a *pre-parsed* JSON body (the
+                    // "body-parser middleware" contract) — handing it the raw Buffer
+                    // fails schema validation and every POST dies with "Invalid
+                    // JSON-RPC message". The request stream is already consumed by
+                    // readBody, so the SDK cannot re-read it: parse here, 400 on bad JSON.
+                    let parsedBody: unknown;
+                    try {
+                        parsedBody = JSON.parse(body.toString('utf8'));
+                    } catch {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            jsonrpc: '2.0',
+                            error: { code: -32700, message: 'Parse error: request body is not valid JSON' },
+                            id: null,
+                        }));
+                        return;
+                    }
                     const session = await this.getOrCreateStreamableSession(sessionId);
-                    await session.transport.handleRequest(req, res, body);
+                    await session.transport.handleRequest(req, res, parsedBody);
                     return;
                 }
 
