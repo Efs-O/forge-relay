@@ -314,6 +314,12 @@ Licensed under Apache-2.0. See [LICENSE](LICENSE) for details.
 
 ---
 
+## Contact
+
+Maintained by [Efs-O](https://github.com/Efs-O) — amandoulou@yahoo.gr
+
+---
+
 ## Roadmap
 
 - [ ] WebSocket push instead of 2s polling

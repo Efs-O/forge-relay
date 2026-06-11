@@ -19,3 +19,7 @@ docs/POLISH_ITEMS.md
 docs/SHARED_AGENT_PROMPT.md
 docs/TODO-forge-concurrency-hardening.md
 docs/TODO-REVERT-ENV-PROBE-BEFORE-PUBLISH.md
+.claude.disabled/
+MCP.txt
+rps/
+tictactoe/
