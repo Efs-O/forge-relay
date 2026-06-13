@@ -102,7 +102,7 @@ export async function runWorkerLoop(
         const res = await withConnRetry(
             () => chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal),
             { signal: opts.signal, onRetry: opts.onRetry },
-        ) as { choices?: Array<{ message?: OpenAiMessage }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
+        ) as { choices?: Array<{ message?: OpenAiMessage; finish_reason?: string | null }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
 
         // Track context/token usage when the backend reports it (llama.cpp, Ollama
         // and the bridge all include an OpenAI `usage` block).
@@ -113,14 +113,22 @@ export async function runWorkerLoop(
             opts.onUsage?.(promptTokens, totalTokens);
         }
 
-        const msg = res.choices?.[0]?.message;
+        const choice = res.choices?.[0];
+        const msg = choice?.message;
         if (!msg) {
             return { finalText: 'Worker returned no message.', steps: step + 1, toolCalls, promptTokens, totalTokens };
         }
 
         const calls = msg.tool_calls ?? [];
         if (calls.length === 0) {
-            return { finalText: (msg.content ?? '').trim() || '(worker finished with no summary)', steps: step + 1, toolCalls, promptTokens, totalTokens };
+            const text = (msg.content ?? '').trim();
+            // F1: a reasoning/length overflow produces empty content + no tool calls
+            // + finish_reason 'length'. Surface it as a worker ERROR rather than a
+            // COMPLETED with an empty body that looks like success.
+            if (!text && choice?.finish_reason === 'length') {
+                throw new Error('worker produced no output and hit the token limit (reasoning/length overflow — raise max_tokens or lower reasoning_effort)');
+            }
+            return { finalText: text || '(worker finished with no summary)', steps: step + 1, toolCalls, promptTokens, totalTokens };
         }
 
         // Echo the assistant tool-call message, then append each tool result.
@@ -190,7 +198,8 @@ export async function handleDispatchSubagent(
     if (!model) { return 'ERROR: dispatch_subagent requires a model.'; }
     if (!task) { return 'ERROR: dispatch_subagent requires a task.'; }
 
-    const requestedTools = (String(args.tools ?? 'none') as SubagentToolMode);
+    const toolsSpecified = args.tools !== undefined;
+    let requestedTools = (String(args.tools ?? 'none') as SubagentToolMode);
     const context = args.context !== undefined ? String(args.context) : undefined;
     const mode = String(args.mode ?? backends.defaultRunMode ?? 'sync') === 'async' ? 'async' : 'sync';
 
@@ -269,6 +278,13 @@ export async function handleDispatchSubagent(
             return `SUBAGENT not dispatched (${model}) — ${probe.message}`;
         }
         modelNote = route.note ?? modelRoutingNote(resolved, probe.models);
+    }
+
+    // Cloud-provider workers (Forge /chat) run on the provider's hardware, so the
+    // VRAM-rationing Tier 1/2 split doesn't apply — default them to full agentic
+    // tools. Write safety still comes from the board autonomy mode + denylist.
+    if (resolved.backend === 'forge-chat' && !toolsSpecified) {
+        requestedTools = 'full';
     }
 
     // Tier 1 — reasoning-only completion.
