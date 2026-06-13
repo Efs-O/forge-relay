@@ -9,6 +9,7 @@ import { BoardPanel } from './boardPanel';
 import { BoardViewProvider } from './boardView';
 import { BoardWatcher } from './boardWatcher';
 import { RuntimeManager } from './runtimeManager';
+import { subagentEnvFromBackends } from './subagent';
 import { RuntimeStatus } from './runtimeBridge';
 import { BoardEvent, ClaudeMode, SessionRoster } from './types';
 
@@ -41,7 +42,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const bridge = new Bridge(repoRoot);
     bridge.ensureAutonomyDefault(config.get<'draft' | 'clanker'>('defaultAutonomy', 'draft'));
-    mcpServer = new McpServer(bridge, {
+    const subagentBackends = {
         bridgeUrl: config.get<string>('subagentBridgeUrl', '').trim(),
         ollamaUrl: config.get<string>('subagentOllamaUrl', 'http://127.0.0.1:11434/v1').trim(),
         directUrl: config.get<string>('subagentDirectUrl', 'http://127.0.0.1:8080/v1').trim(),
@@ -49,7 +50,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'ollama'),
         forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
         defaultRunMode: config.get<'sync' | 'async'>('subagentDefaultMode', 'sync'),
-    });
+    };
+    mcpServer = new McpServer(bridge, subagentBackends);
 
     let port: number;
     try {
@@ -83,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         claudeModel: config.get<string>('claudeModel', '').trim() || undefined,
         claudeKeepAliveMs: config.get<number>('claudeKeepAliveMs', 0),
         claudeKeepAliveMaxPings: config.get<number>('claudeKeepAliveMaxPings', 3),
+        subagentEnv: subagentEnvFromBackends(subagentBackends),
         onLog: (line) => { log(`[bridge] ${line}`); console.log('[forgerelay:bridge]', line); },
     });
     const rm = runtimeManager;
