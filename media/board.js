@@ -545,10 +545,11 @@ eventFeed.addEventListener('click', async event => {
     }
 });
 
-document.addEventListener('keydown', async event => {
-    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c') {
-        return;
-    }
+// Use the native `copy` event rather than intercepting keydown Ctrl/Cmd+C: the
+// copy event fires once the browser has committed the copy and the selection is
+// current, so it works for keyboard, right-click→Copy, and menu copy alike.
+// (The earlier keydown handler raced selection/focus and silently did nothing.)
+document.addEventListener('copy', event => {
     if (isEditableTarget(event.target)) {
         return;
     }
@@ -557,12 +558,10 @@ document.addEventListener('keydown', async event => {
     if (!text.trim()) {
         return;
     }
-    event.preventDefault();
-    try {
-        await navigator.clipboard.writeText(text);
+    if (event.clipboardData) {
+        event.clipboardData.setData('text/plain', text);
+        event.preventDefault();
         showBanner('Selection copied.', 'notice');
-    } catch {
-        showBanner('Copy failed for the current selection.', 'error');
     }
 });
 
