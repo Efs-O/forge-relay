@@ -6,6 +6,7 @@ import {
     decideForgeRoute, fetchForgeCatalog, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
 import { forgeHolds, forgeSlots } from './forgeHold';
+import { ensureOllamaDaemon } from './daemonSupervisor';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 
 interface OpenAiToolCall {
@@ -272,7 +273,19 @@ export async function handleDispatchSubagent(
         // otherwise carry a routing note (e.g. direct ignores the model id, or the
         // id isn't served) so the orchestrator knows what actually ran.
         resolved = route.resolved;
-        const probe = await validateBackend(resolved);
+        let probe = await validateBackend(resolved);
+        // F6 Part B: opt-in ollama auto-start. Forge control is NOT auto-startable
+        // from Relay (it lives in the VS Code extension host) — only probed above.
+        if (!probe.reachable && resolved.backend === 'ollama') {
+            const sup = await ensureOllamaDaemon(backends.ollamaUrl, {
+                autoStart: backends.ollamaAutoStart,
+                executable: backends.ollamaExecutable,
+            });
+            if (sup.started || sup.message) {
+                bridge.post(worker, formatWorkerPost(`ollama auto-start: ${sup.up ? 'daemon up' : sup.message}`));
+            }
+            if (sup.up) { probe = await validateBackend(resolved); }
+        }
         if (!probe.reachable) {
             finishWorkerRun();
             return `SUBAGENT not dispatched (${model}) — ${probe.message}`;

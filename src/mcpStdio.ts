@@ -62,6 +62,8 @@ const subagentBackends: SubagentBackends = {
     defaultBackend: (process.env.FORGERELAY_DEFAULT_BACKEND as SubagentBackends['defaultBackend']) || DEFAULT_SUBAGENT_BACKENDS.defaultBackend,
     forgeControlUrl: process.env.FORGERELAY_FORGE_CONTROL_URL || undefined,
     defaultRunMode: (process.env.FORGERELAY_DEFAULT_MODE as SubagentBackends['defaultRunMode']) || DEFAULT_SUBAGENT_BACKENDS.defaultRunMode,
+    ollamaAutoStart: process.env.FORGERELAY_OLLAMA_AUTO_START === '1',
+    ollamaExecutable: process.env.FORGERELAY_OLLAMA_EXECUTABLE || undefined,
 };
 
 const server = new Server(

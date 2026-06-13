@@ -2,7 +2,7 @@
   "name": "forge-relay",
   "displayName": "Forge Relay",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.3.20",
+  "version": "0.3.21",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "icon": "media/forge-relay-logo-128.png",
@@ -174,6 +174,16 @@
           "type": "string",
           "default": "",
           "description": "Opt-in Forge model-control API base (e.g. http://127.0.0.1:8799). When set, dispatch_subagent routes unprefixed (and 'forge:'-prefixed) models through Forge, which loads the requested model on demand, waits until it is healthy, and returns its endpoint - eliminating 'fetch failed' / wrong-model errors. Leave empty to keep the direct bridge/ollama/direct routing."
+        },
+        "forgeRelay.ollamaAutoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in: when a dispatch routes to the ollama backend and the daemon is down, start 'ollama serve' once and re-probe (bounded). Off by default - explicit over hidden. Forge's control server is never auto-started from Relay (it runs in the VS Code extension host)."
+        },
+        "forgeRelay.ollamaExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Executable used for ollama auto-start (default: 'ollama' on PATH). Only used when forgeRelay.ollamaAutoStart is enabled."
         },
         "forgeRelay.defaultAutonomy": {
           "type": "string",
