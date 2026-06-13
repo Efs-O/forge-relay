@@ -36,6 +36,13 @@ export interface SubagentBackends {
      * async the default for parallel fan-out without relying on prompt wording.
      */
     defaultRunMode?: SubagentRunMode;
+    /**
+     * F6 Part B (opt-in): when the ollama route is down at dispatch time, start
+     * `ollama serve` once and re-probe. Off by default — explicit over hidden.
+     */
+    ollamaAutoStart?: boolean;
+    /** Executable for ollama auto-start (default `ollama` on PATH). */
+    ollamaExecutable?: string;
 }
 
 export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
@@ -62,6 +69,8 @@ export function subagentEnvFromBackends(backends: SubagentBackends): Record<stri
     if (backends.bridgeApiKey) { env.FORGERELAY_BRIDGE_API_KEY = backends.bridgeApiKey; }
     if (backends.defaultBackend) { env.FORGERELAY_DEFAULT_BACKEND = backends.defaultBackend; }
     if (backends.defaultRunMode) { env.FORGERELAY_DEFAULT_MODE = backends.defaultRunMode; }
+    if (backends.ollamaAutoStart) { env.FORGERELAY_OLLAMA_AUTO_START = '1'; }
+    if (backends.ollamaExecutable) { env.FORGERELAY_OLLAMA_EXECUTABLE = backends.ollamaExecutable; }
     return env;
 }
 
@@ -145,6 +154,19 @@ function modelPrefix(model: string): string | null {
     if (sep === -1) { return null; }
     const prefix = model.slice(0, sep).toLowerCase();
     return ROUTE_PREFIXES.has(prefix) ? prefix : null;
+}
+
+/**
+ * F6: split a trailing `@<profile>` off a (prefix-stripped) model id. The
+ * `@profile` suffix is orthogonal to `prefix:` routing and to the colon inside
+ * ollama ids — only the last `@<[A-Za-z0-9_-]+>` is stripped, so
+ * `gemma4:31b-cloud@worker` keeps its colon. Relay routes on `base` and carries
+ * the full `base@profile` to Forge, which owns profile resolution.
+ */
+export function splitProfile(model: string): { base: string; profile?: string } {
+    const m = /^(.*)@([A-Za-z0-9_-]+)$/.exec(model);
+    if (!m || m[1].length === 0) { return { base: model }; }
+    return { base: m[1], profile: m[2] };
 }
 
 export interface ChatMessage {
@@ -519,38 +541,44 @@ export function decideForgeRoute(
     catalog: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe },
 ): DispatchRouteDecision {
     const prefix = modelPrefix(model);
-    const name = modelName(model).trim();
-    if (!name) { return { kind: 'error', message: 'worker model id is empty.' }; }
+    // F6: route on `base`; carry the full `base@profile` (`qualified`) to Forge,
+    // which resolves the profile. Non-Forge backends don't understand profiles,
+    // so they receive the base only.
+    const { base, profile } = splitProfile(modelName(model).trim());
+    if (!base) { return { kind: 'error', message: 'worker model id is empty.' }; }
+    const qualified = profile ? `${base}@${profile}` : base;
 
     if (prefix === 'bridge' || prefix === 'ollama' || prefix === 'direct') {
         const resolved = resolveModel(model, backends);
+        resolved.model = base; // profiles are a Forge concept; strip for raw backends
         if (!resolved.baseUrl) {
             return { kind: 'error', message: `"${prefix}:" routing requested but its endpoint URL is not configured (set forgeRelay.subagent${prefix === 'bridge' ? 'Bridge' : prefix === 'ollama' ? 'Ollama' : 'Direct'}Url). Note the legacy Forge Python bridge (:9099) was removed from Forge — prefer "forge:" routing via the control API.` };
         }
-        return { kind: 'resolved', resolved, canonical: `${prefix}:${name}` };
+        return { kind: 'resolved', resolved, canonical: `${prefix}:${base}` };
     }
     if (prefix === 'forge') {
         if (!backends.forgeControlUrl) {
             return { kind: 'error', message: '"forge:" routing requested but no forgeControlUrl is configured (set forgeRelay.subagentForgeControlUrl / FORGERELAY_FORGE_CONTROL_URL).' };
         }
-        return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
+        return { kind: 'forge-control', model: qualified, canonical: `forge:${qualified}` };
     }
     if (!backends.forgeControlUrl) {
         const resolved = resolveModel(model, backends);
+        resolved.model = base;
         if (!resolved.baseUrl) {
             return { kind: 'error', message: `default backend "${backends.defaultBackend}" has no endpoint URL configured. Set forgeRelay.subagentForgeControlUrl (recommended) or an explicit backend URL.` };
         }
-        return { kind: 'resolved', resolved, canonical: `${backends.defaultBackend}:${name}` };
+        return { kind: 'resolved', resolved, canonical: `${backends.defaultBackend}:${base}` };
     }
 
-    const controlMatches = uniqueEntries((catalog.control.models ?? []).filter(entry => entry.name === name));
-    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === name));
+    const controlMatches = uniqueEntries((catalog.control.models ?? []).filter(entry => entry.name === base));
+    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === base));
     const allMatches = [...controlMatches, ...bridgeMatches];
 
     if (allMatches.length > 1) {
         return {
             kind: 'error',
-            message: `model "${name}" is ambiguous across the Forge-exposed catalog. Retry with an explicit target. Valid options: ${formatCatalogOptions(allMatches)}`,
+            message: `model "${base}" is ambiguous across the Forge-exposed catalog. Retry with an explicit target. Valid options: ${formatCatalogOptions(allMatches)}`,
         };
     }
 
@@ -558,15 +586,16 @@ export function decideForgeRoute(
         // Cloud-provider models (servable:false) have no local port to /ensure;
         // route them at Forge's in-host /chat proxy instead. They then flow through
         // the existing kind:'resolved' dispatch path — no /ensure, hold, or slot.
+        // The @profile is carried so Forge's /chat applies it (request-time).
         if (controlMatches[0].servable === false) {
             return {
                 kind: 'resolved',
-                resolved: { backend: 'forge-chat', model: name, baseUrl: backends.forgeControlUrl },
-                canonical: `forge:${name}`,
+                resolved: { backend: 'forge-chat', model: qualified, baseUrl: backends.forgeControlUrl },
+                canonical: `forge:${qualified}`,
                 note: ' (cloud via Forge /chat)',
             };
         }
-        return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
+        return { kind: 'forge-control', model: qualified, canonical: `forge:${qualified}` };
     }
 
     if (bridgeMatches.length === 1) {
@@ -574,7 +603,7 @@ export function decideForgeRoute(
             kind: 'resolved',
             resolved: {
                 backend: 'bridge',
-                model: name,
+                model: base,
                 baseUrl: backends.bridgeUrl,
                 apiKey: backends.bridgeApiKey,
             },
@@ -587,7 +616,7 @@ export function decideForgeRoute(
     if (!catalog.control.ok) { details.push(`Forge control catalog unavailable: ${catalog.control.error}`); }
     if (!catalog.bridge.ok) { details.push(`Forge bridge catalog unavailable: ${catalog.bridge.error}`); }
     const suffix = details.length ? ` ${details.join(' | ')}` : ' Run list_models to inspect the Forge-exposed catalog.';
-    return { kind: 'error', message: `model "${name}" was not found in the Forge control or Forge bridge catalogs.${suffix}` };
+    return { kind: 'error', message: `model "${base}" was not found in the Forge control or Forge bridge catalogs.${suffix}` };
 }
 
 /** Check whether the resolved backend is reachable (connection-level) before dispatch. */
@@ -613,8 +642,9 @@ export function modelRoutingNote(resolved: ResolvedModel, served?: string[]): st
     if (resolved.backend === 'direct') {
         return ` (note: direct backend serves "${served[0]}" and ignores the requested model id)`;
     }
-    if (!served.includes(resolved.model)) {
-        return ` (warning: "${resolved.model}" not in ${resolved.backend} model list: ${served.slice(0, 6).join(', ')})`;
+    const base = splitProfile(resolved.model).base; // catalog lists base names (F6)
+    if (!served.includes(base)) {
+        return ` (warning: "${base}" not in ${resolved.backend} model list: ${served.slice(0, 6).join(', ')})`;
     }
     return '';
 }

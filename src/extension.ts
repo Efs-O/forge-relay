@@ -50,6 +50,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'ollama'),
         forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
         defaultRunMode: config.get<'sync' | 'async'>('subagentDefaultMode', 'sync'),
+        ollamaAutoStart: config.get<boolean>('ollamaAutoStart', false),
+        ollamaExecutable: config.get<string>('ollamaExecutable', '').trim() || undefined,
     };
     mcpServer = new McpServer(bridge, subagentBackends);
 
