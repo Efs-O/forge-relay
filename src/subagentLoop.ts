@@ -291,7 +291,9 @@ export async function handleDispatchSubagent(
     if (requestedTools === 'none') {
         const slot = await acquireSlot();
         try {
-            const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context }, resolved);
+            // Reuse the worker identity already reserved above (F2: avoids a second
+            // beginWorkerRun that double-counts the ordinal and collides on worker-N).
+            const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context }, resolved, worker);
             return r.status === 'completed'
                 ? `SUBAGENT ${r.subagentId} (${model})${modelNote} COMPLETED:\n\n${r.result}`
                 : `SUBAGENT ${r.subagentId} (${model}) ERROR: ${r.error}`;

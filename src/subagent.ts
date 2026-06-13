@@ -218,12 +218,20 @@ export async function chatCompletion(
         temperature: opts.temperature ?? 0.2,
         max_tokens: opts.maxTokens ?? 1024,
         stream: false,
-    }, opts.signal) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = data.choices?.[0]?.message?.content;
+    }, opts.signal) as { choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }> };
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content;
     if (typeof content !== 'string') {
         throw new Error(`${resolved.backend} backend returned no message content`);
     }
-    return content.trim();
+    const trimmed = content.trim();
+    // F1: reasoning/length overflow yields empty content + finish_reason 'length'.
+    // Surface it as an error rather than a COMPLETED with an empty body that reads
+    // like success. Mirrors the agentic-loop guard in runWorkerLoop.
+    if (!trimmed && choice?.finish_reason === 'length') {
+        throw new Error('worker produced no output and hit the token limit (reasoning/length overflow — raise max_tokens or lower reasoning_effort)');
+    }
+    return trimmed;
 }
 
 /**
@@ -830,9 +838,15 @@ export async function dispatchSubagentTier1(
     backends: SubagentBackends,
     opts: DispatchOptions,
     resolvedOverride?: ResolvedModel,
+    workerName?: string,
 ): Promise<DispatchResult> {
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const worker = workerAgentName(opts.model, beginWorkerRun());
+    // F2: when the caller (handleDispatchSubagent) already reserved the worker
+    // ordinal, reuse that identity and let the caller own the run lifecycle.
+    // Allocating a second ordinal here double-consumed the counter and, with the
+    // drain-reset, made sequential Tier-1 dispatches collide on the same worker-N.
+    const ownsRun = workerName === undefined;
+    const worker = workerName ?? workerAgentName(opts.model, beginWorkerRun());
     const resolved = resolvedOverride ?? resolveModel(opts.model, backends);
 
     try {
@@ -851,7 +865,7 @@ export async function dispatchSubagentTier1(
         bridge.post(worker, formatWorkerPost(`error [${subagentId.slice(0, 10)}]: ${error}`));
         return { subagentId, status: 'error', error };
     } finally {
-        endWorkerRun();
+        if (ownsRun) { endWorkerRun(); }
     }
 }
 
