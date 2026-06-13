@@ -46,6 +46,25 @@ export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
     defaultRunMode: 'sync',
 };
 
+/**
+ * Mirror the workspace subagent settings as the `FORGERELAY_*` env vars that
+ * `mcpStdio.ts` reads. The stdio MCP server (spawned by Claude via `.mcp.json`)
+ * has no access to VS Code settings, so without this block it ran with defaults
+ * — no Forge route — while the extension's :7878 server had the full catalog.
+ * Injected into the managed `.mcp.json` entry by `ensureClaudeMcpConfig()`.
+ */
+export function subagentEnvFromBackends(backends: SubagentBackends): Record<string, string> {
+    const env: Record<string, string> = {};
+    if (backends.forgeControlUrl) { env.FORGERELAY_FORGE_CONTROL_URL = backends.forgeControlUrl; }
+    if (backends.bridgeUrl) { env.FORGERELAY_BRIDGE_URL = backends.bridgeUrl; }
+    if (backends.ollamaUrl) { env.FORGERELAY_OLLAMA_URL = backends.ollamaUrl; }
+    if (backends.directUrl) { env.FORGERELAY_DIRECT_URL = backends.directUrl; }
+    if (backends.bridgeApiKey) { env.FORGERELAY_BRIDGE_API_KEY = backends.bridgeApiKey; }
+    if (backends.defaultBackend) { env.FORGERELAY_DEFAULT_BACKEND = backends.defaultBackend; }
+    if (backends.defaultRunMode) { env.FORGERELAY_DEFAULT_MODE = backends.defaultRunMode; }
+    return env;
+}
+
 export type SubagentToolMode = 'none' | 'readonly' | 'full';
 export type SubagentRunMode = 'sync' | 'async';
 
@@ -79,6 +98,9 @@ export interface CatalogModelEntry {
     backend?: string;
     provider?: string;
     loaded?: boolean;
+    /** Forge `GET /models` marks cloud-provider models `servable:false` — they have
+     *  no local port and must be dispatched via Forge's in-host `POST /chat` proxy. */
+    servable?: boolean;
 }
 
 /** Resolve a (possibly prefixed) model id to a concrete backend + endpoint. */
@@ -104,35 +126,25 @@ export function resolveModel(model: string, backends: SubagentBackends): Resolve
     };
 }
 
+/**
+ * The only first segments that are route selectors. Anything else before a colon
+ * is part of the model name itself — Ollama ids are colon-tagged (e.g.
+ * `gemma4:31b-cloud`), so blindly splitting at the first colon turned every
+ * unprefixed Ollama model into a catalog miss ("31b-cloud" not found).
+ */
+const ROUTE_PREFIXES = new Set(['forge', 'bridge', 'ollama', 'direct']);
+
 function modelName(model: string): string {
     const sep = model.indexOf(':');
-    return sep === -1 ? model : model.slice(sep + 1);
+    if (sep === -1 || !ROUTE_PREFIXES.has(model.slice(0, sep).toLowerCase())) { return model; }
+    return model.slice(sep + 1);
 }
 
 function modelPrefix(model: string): string | null {
     const sep = model.indexOf(':');
-    return sep === -1 ? null : model.slice(0, sep).toLowerCase();
-}
-
-/**
- * Decide whether a dispatch should route through Forge's control API, and return
- * the bare Forge model name to pass to `/ensure` (the `forge:` prefix stripped).
- * Rules: an explicit `forge:` prefix always routes via Forge; an explicit
- * `bridge:`/`ollama:`/`direct:` prefix always keeps its existing direct routing
- * (so the Forge route never overrides a deliberate backend choice); anything else
- * (unprefixed, or an unknown prefix) routes via Forge only when `forgeControlUrl`
- * is set. When it is unset, this always returns `viaForge: false`.
- */
-export function forgeRoute(model: string, backends: SubagentBackends): { viaForge: boolean; model: string } {
-    const sep = model.indexOf(':');
-    if (sep !== -1) {
-        const prefix = model.slice(0, sep).toLowerCase();
-        if (prefix === 'forge') { return { viaForge: true, model: model.slice(sep + 1) }; }
-        if (prefix === 'bridge' || prefix === 'ollama' || prefix === 'direct') {
-            return { viaForge: false, model };
-        }
-    }
-    return { viaForge: Boolean(backends.forgeControlUrl), model };
+    if (sep === -1) { return null; }
+    const prefix = model.slice(0, sep).toLowerCase();
+    return ROUTE_PREFIXES.has(prefix) ? prefix : null;
 }
 
 export interface ChatMessage {
@@ -165,7 +177,12 @@ async function postChat(
     body: Record<string, unknown>,
     signal?: AbortSignal,
 ): Promise<unknown> {
-    const url = `${resolved.baseUrl.replace(/\/$/, '')}/chat/completions`;
+    // Cloud-provider workers go through Forge's in-host `POST /chat` proxy (their
+    // API key lives only in VS Code SecretStorage); everything else speaks the
+    // standard OpenAI `/chat/completions`. Forge's /chat ignores `stream` and
+    // returns the same OpenAI response shape, so the body + parsing are unchanged.
+    const path = resolved.backend === 'forge-chat' ? '/chat' : '/chat/completions';
+    const url = `${resolved.baseUrl.replace(/\/$/, '')}${path}`;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (resolved.apiKey) {
         headers['Authorization'] = `Bearer ${resolved.apiKey}`;
@@ -201,12 +218,20 @@ export async function chatCompletion(
         temperature: opts.temperature ?? 0.2,
         max_tokens: opts.maxTokens ?? 1024,
         stream: false,
-    }, opts.signal) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = data.choices?.[0]?.message?.content;
+    }, opts.signal) as { choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }> };
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content;
     if (typeof content !== 'string') {
         throw new Error(`${resolved.backend} backend returned no message content`);
     }
-    return content.trim();
+    const trimmed = content.trim();
+    // F1: reasoning/length overflow yields empty content + finish_reason 'length'.
+    // Surface it as an error rather than a COMPLETED with an empty body that reads
+    // like success. Mirrors the agentic-loop guard in runWorkerLoop.
+    if (!trimmed && choice?.finish_reason === 'length') {
+        throw new Error('worker produced no output and hit the token limit (reasoning/length overflow — raise max_tokens or lower reasoning_effort)');
+    }
+    return trimmed;
 }
 
 /**
@@ -331,10 +356,10 @@ async function fetchModelCatalog(
     }
     const data = await res.json().catch(() => ({})) as {
         data?: Array<{ id?: string; provider?: string; owned_by?: string; backend?: string }>;
-        models?: Array<{ name?: string; provider?: string; backend?: string; loaded?: boolean }>;
+        models?: Array<{ name?: string; provider?: string; backend?: string; loaded?: boolean; servable?: boolean }>;
     };
     const forgeModels = (data.models ?? [])
-        .filter((m): m is { name: string; provider?: string; backend?: string; loaded?: boolean } => typeof m.name === 'string' && m.name.length > 0)
+        .filter((m): m is { name: string; provider?: string; backend?: string; loaded?: boolean; servable?: boolean } => typeof m.name === 'string' && m.name.length > 0)
         .map((m) => ({
             name: m.name,
             canonical: canonicalForSource(backend, m.name),
@@ -342,6 +367,7 @@ async function fetchModelCatalog(
             backend: m.backend,
             provider: m.provider,
             loaded: m.loaded,
+            servable: m.servable,
         }));
     if (forgeModels.length) { return uniqueEntries(forgeModels); }
 
@@ -529,6 +555,17 @@ export function decideForgeRoute(
     }
 
     if (controlMatches.length === 1) {
+        // Cloud-provider models (servable:false) have no local port to /ensure;
+        // route them at Forge's in-host /chat proxy instead. They then flow through
+        // the existing kind:'resolved' dispatch path — no /ensure, hold, or slot.
+        if (controlMatches[0].servable === false) {
+            return {
+                kind: 'resolved',
+                resolved: { backend: 'forge-chat', model: name, baseUrl: backends.forgeControlUrl },
+                canonical: `forge:${name}`,
+                note: ' (cloud via Forge /chat)',
+            };
+        }
         return { kind: 'forge-control', model: name, canonical: `forge:${name}` };
     }
 
@@ -773,8 +810,9 @@ export function endWorkerRun(): void {
 }
 
 function workerAgentName(model: string, ordinal?: number): string {
-    // Keep it board-friendly: worker-N:<model-without-backend-prefix>
-    const bare = model.includes(':') ? model.slice(model.indexOf(':') + 1) : model;
+    // Keep it board-friendly: worker-N:<model-without-route-prefix>. Only the
+    // known route prefixes are stripped — a colon inside an Ollama id stays.
+    const bare = modelName(model);
     const prefix = ordinal ? `worker-${ordinal}:` : 'worker:';
     return `${prefix}${bare}`.slice(0, 60);
 }
@@ -800,9 +838,15 @@ export async function dispatchSubagentTier1(
     backends: SubagentBackends,
     opts: DispatchOptions,
     resolvedOverride?: ResolvedModel,
+    workerName?: string,
 ): Promise<DispatchResult> {
     const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const worker = workerAgentName(opts.model, beginWorkerRun());
+    // F2: when the caller (handleDispatchSubagent) already reserved the worker
+    // ordinal, reuse that identity and let the caller own the run lifecycle.
+    // Allocating a second ordinal here double-consumed the counter and, with the
+    // drain-reset, made sequential Tier-1 dispatches collide on the same worker-N.
+    const ownsRun = workerName === undefined;
+    const worker = workerName ?? workerAgentName(opts.model, beginWorkerRun());
     const resolved = resolvedOverride ?? resolveModel(opts.model, backends);
 
     try {
@@ -821,7 +865,7 @@ export async function dispatchSubagentTier1(
         bridge.post(worker, formatWorkerPost(`error [${subagentId.slice(0, 10)}]: ${error}`));
         return { subagentId, status: 'error', error };
     } finally {
-        endWorkerRun();
+        if (ownsRun) { endWorkerRun(); }
     }
 }
 

@@ -23,6 +23,8 @@ const CATALOG: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe } = {
         ok: true,
         models: [
             { name: 'gemma-local', canonical: 'forge:gemma-local', routeFamily: 'forge-control', backend: 'llamacpp', loaded: true },
+            // Ollama-style colon-tagged id: the colon is part of the NAME, not a route prefix.
+            { name: 'gemma4:31b-cloud', canonical: 'forge:gemma4:31b-cloud', routeFamily: 'forge-control', backend: 'ollama', loaded: false },
         ],
     },
     bridge: {
@@ -86,6 +88,68 @@ test('decideForgeRoute keeps explicit raw prefixes as overrides', () => {
     assert.equal(route.resolved.backend, 'direct');
     assert.equal(route.resolved.baseUrl, BACKENDS.directUrl);
     assert.equal(route.resolved.model, 'anything');
+});
+
+test('decideForgeRoute keeps colons inside unprefixed Ollama-style ids (no first-colon split)', () => {
+    const route = decideForgeRoute('gemma4:31b-cloud', BACKENDS, CATALOG);
+    assert.equal(route.kind, 'forge-control');
+    if (route.kind !== 'forge-control') { return; }
+    assert.equal(route.model, 'gemma4:31b-cloud');
+    assert.equal(route.canonical, 'forge:gemma4:31b-cloud');
+});
+
+test('decideForgeRoute strips an explicit forge: prefix but keeps the colon-tagged remainder intact', () => {
+    const route = decideForgeRoute('forge:gemma4:31b-cloud', BACKENDS, CATALOG);
+    assert.equal(route.kind, 'forge-control');
+    if (route.kind !== 'forge-control') { return; }
+    assert.equal(route.model, 'gemma4:31b-cloud');
+    assert.equal(route.canonical, 'forge:gemma4:31b-cloud');
+});
+
+test('decideForgeRoute routes ollama:-prefixed colon-tagged ids to the ollama backend with the full name', () => {
+    const route = decideForgeRoute('ollama:gemma4:31b-cloud', BACKENDS, CATALOG);
+    assert.equal(route.kind, 'resolved');
+    if (route.kind !== 'resolved') { return; }
+    assert.equal(route.resolved.backend, 'ollama');
+    assert.equal(route.resolved.baseUrl, BACKENDS.ollamaUrl);
+    assert.equal(route.resolved.model, 'gemma4:31b-cloud');
+});
+
+test('decideForgeRoute sends a servable:false (cloud) control match to the Forge /chat proxy', () => {
+    const cloudCatalog: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe } = {
+        control: {
+            backend: 'forge-control',
+            baseUrl: BACKENDS.forgeControlUrl!,
+            ok: true,
+            models: [
+                { name: 'grok-4', canonical: 'forge:grok-4', routeFamily: 'forge-control', backend: 'xai', servable: false },
+            ],
+        },
+        bridge: { backend: 'forge-bridge', baseUrl: BACKENDS.bridgeUrl, ok: true, models: [] },
+    };
+    const route = decideForgeRoute('grok-4', BACKENDS, cloudCatalog);
+    assert.equal(route.kind, 'resolved');
+    if (route.kind !== 'resolved') { return; }
+    assert.equal(route.resolved.backend, 'forge-chat');
+    assert.equal(route.resolved.baseUrl, BACKENDS.forgeControlUrl);
+    assert.equal(route.resolved.model, 'grok-4');
+    assert.equal(route.canonical, 'forge:grok-4');
+});
+
+test('decideForgeRoute keeps a servable:true control match on the local /ensure route', () => {
+    const localCatalog: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe } = {
+        control: {
+            backend: 'forge-control',
+            baseUrl: BACKENDS.forgeControlUrl!,
+            ok: true,
+            models: [
+                { name: 'gemma-local', canonical: 'forge:gemma-local', routeFamily: 'forge-control', backend: 'llamacpp', servable: true },
+            ],
+        },
+        bridge: { backend: 'forge-bridge', baseUrl: BACKENDS.bridgeUrl, ok: true, models: [] },
+    };
+    const route = decideForgeRoute('gemma-local', BACKENDS, localCatalog);
+    assert.equal(route.kind, 'forge-control');
 });
 
 test('decideForgeRoute fails clearly when a bare id is missing from Forge catalogs', () => {

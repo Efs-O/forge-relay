@@ -41,6 +41,14 @@ export interface RuntimeManagerOptions {
      * (the old runaway behavior — not recommended).
      */
     claudeKeepAliveMaxPings?: number;
+    /**
+     * `FORGERELAY_*` env vars mirroring the workspace subagent settings (see
+     * subagentEnvFromBackends). Injected into the managed `.mcp.json` entry so
+     * the stdio MCP server resolves models with the same Forge route / backend
+     * URLs as the extension's HTTP server — without it, a Mode A Claude session
+     * gets the forgerelay tools but no Forge catalog.
+     */
+    subagentEnv?: Record<string, string>;
     onLog?: (line: string) => void;
 }
 
@@ -65,11 +73,13 @@ export class RuntimeManager {
      *  install — this is what makes the Mode A config self-healing). */
     private readonly mcpStdioPath: string;
     private readonly repoRoot: string;
+    private readonly subagentEnv?: Record<string, string>;
     private readonly onLog?: (line: string) => void;
 
     constructor(opts: RuntimeManagerOptions) {
         this.mcpStdioPath = opts.mcpStdioPath;
         this.repoRoot = opts.repoRoot;
+        this.subagentEnv = opts.subagentEnv;
         this.onLog = opts.onLog;
 
         // Attach the Forge Relay MCP server. Mode defaults to the orchestrator
@@ -162,7 +172,11 @@ export class RuntimeManager {
         const configPath = path.join(this.repoRoot, '.mcp.json');
         const stdioPath = this.mcpStdioPath.replace(/\\/g, '/');
         const repoRoot = this.repoRoot.replace(/\\/g, '/');
-        const desired = { command: 'node', args: [stdioPath, '--repoRoot', repoRoot] };
+        const desired: { command: string; args: string[]; env?: Record<string, string> } =
+            { command: 'node', args: [stdioPath, '--repoRoot', repoRoot] };
+        if (this.subagentEnv && Object.keys(this.subagentEnv).length > 0) {
+            desired.env = this.subagentEnv;
+        }
 
         try {
             let config: { mcpServers?: Record<string, unknown> } = {};

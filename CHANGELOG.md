@@ -2,6 +2,22 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.3.19
+
+- Fixed colon-id routing: an unprefixed Ollama-style model id (e.g.
+  `gemma4:31b-cloud`) was split at its first colon, so the entire colon-tagged
+  Ollama/cloud family failed catalog lookup unless wrapped in an explicit
+  `forge:` prefix. Only the four route prefixes (`forge:` / `bridge:` /
+  `ollama:` / `direct:`) are stripped now; any other first segment is part of
+  the model name. Worker board names get the same treatment (no more
+  `worker-1:31b-cloud`).
+- Unified subagent config across Relay's two MCP servers: the managed
+  `.mcp.json` entry now carries a `FORGERELAY_*` env block mirroring the
+  workspace `forgeRelay.subagent*` settings, so the stdio server Claude spawns
+  resolves models with the same Forge route and backend URLs as the extension's
+  HTTP server (previously it silently ran with defaults — no Forge catalog).
+- Removed the dead `forgeRoute()` helper (superseded by `decideForgeRoute`).
+
 ## 0.3.18
 
 - Fixed the streamable-HTTP MCP transport: `POST /mcp` handed the raw request

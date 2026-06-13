@@ -7,6 +7,15 @@ test('workerAgentName includes a numbered worker prefix', () => {
     assert.equal(worker, 'worker-3:gemma-3n');
 });
 
+test('workerAgentName keeps colon-tagged Ollama ids intact when unprefixed', () => {
+    assert.equal(workerAgentName('gemma4:31b-cloud', 1), 'worker-1:gemma4:31b-cloud');
+});
+
+test('workerAgentName strips only known route prefixes from colon-tagged ids', () => {
+    assert.equal(workerAgentName('forge:gemma4:31b-cloud', 2), 'worker-2:gemma4:31b-cloud');
+    assert.equal(workerAgentName('ollama:gemma4:31b-cloud', 3), 'worker-3:gemma4:31b-cloud');
+});
+
 test('nextWorkerOrdinal increments monotonically', () => {
     const first = nextWorkerOrdinal();
     const second = nextWorkerOrdinal();
