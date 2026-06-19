@@ -5,6 +5,7 @@
   "version": "0.3.22",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
+  "preview": true,
   "icon": "media/forge-relay-logo-128.png",
   "galleryBanner": {
     "color": "#1a1a2e",
@@ -14,6 +15,10 @@
     "type": "git",
     "url": "https://github.com/Efs-O/forge-relay"
   },
+  "bugs": {
+    "url": "https://github.com/Efs-O/forge-relay/issues"
+  },
+  "homepage": "https://github.com/Efs-O/forge-relay#readme",
   "engines": {
     "vscode": "^1.100.0"
   },

@@ -8,6 +8,22 @@ It can also route delegated work to optional local-model workers through Forge-m
 
 ---
 
+## Screenshots
+
+**The board** — agent status, task input, and a live feed of claims, posts, and worker activity:
+
+![Forge Relay board with live event feed](media/screenshot-board.jpg)
+
+**Start an agent session** — pick which orchestrators participate (Claude Mode A/B, or Codex via its own MCP session):
+
+![Start Agent Session dialog](media/screenshot-session.jpg)
+
+**Claims and operator controls** — active claims, open commands, and manual STOP / PAUSE / claim / release actions:
+
+![Active claims and operator STOP/PAUSE controls](media/screenshot-controls.jpg)
+
+---
+
 ## Why Forge Relay
 
 When two AI coding agents work on the same repo simultaneously, they will:
@@ -182,7 +198,8 @@ Forge Relay now treats Forge as the normal routing surface for worker models.
 
 - pass a plain Forge-exposed model name to `dispatch_subagent` in normal use
 - local Forge-managed GGUF models route through Forge control
-- provider-backed Forge-exposed models route through the Forge bridge
+- provider-backed Forge-exposed models (xAI, OpenRouter, etc.) route through Forge's in-host `POST /chat` proxy, so their API keys never leave the Forge extension host
+- a trailing `@profile` (e.g. `gemma4:31b@long-ctx`) is carried through to Forge for request-time profile resolution; the base model is what gets pooled
 - explicit `forge:` / `bridge:` / `ollama:` / `direct:` prefixes are still valid, but they are override/debug paths rather than the normal workflow
 - use `list_models` to inspect the merged Forge-first catalog before dispatching unfamiliar models
 
