@@ -8,6 +8,7 @@ import { Bridge } from './bridge';
 import { EventTail } from './eventTail';
 import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
 import { handleDispatchSubagent } from './subagentLoop';
+import { isVsCodeInstallDir, fallbackCoordinationRoot } from './vscodeInstallDir';
 
 // repoRoot resolution order: FORGERELAY_REPO_ROOT env wins, then --repoRoot, then
 // cwd. The codex/claude auto-bridge injects FORGERELAY_REPO_ROOT with the actual
@@ -15,8 +16,17 @@ import { handleDispatchSubagent } from './subagentLoop';
 // *global* ~/.codex/config.toml — otherwise every codex window posts to whichever
 // single repo that config names, instead of its own workspace board.
 const repoRootArg = process.argv.indexOf('--repoRoot');
-const repoRoot = process.env.FORGERELAY_REPO_ROOT
+let repoRoot = process.env.FORGERELAY_REPO_ROOT
     || (repoRootArg !== -1 ? process.argv[repoRootArg + 1] : process.cwd());
+
+// Never write the .coordination board into a VS Code install dir. When spawned
+// with cwd inside the install folder (no real workspace), creating the board
+// there keeps mcpstdio.log open and blocks the auto-updater forever
+// ("Access is denied (os error 5)"). This headless server can't prompt, so it
+// redirects the board to a safe per-user fallback instead of poisoning the dir.
+if (isVsCodeInstallDir(repoRoot)) {
+    repoRoot = fallbackCoordinationRoot();
+}
 
 const bridge = new Bridge(repoRoot);
 // B7: single source of truth for the coordination dir — ask the bridge rather

@@ -8,6 +8,22 @@ It can also route delegated work to optional local-model workers through Forge-m
 
 ---
 
+## Screenshots
+
+**The board** — agent status, task input, and a live feed of claims, posts, and worker activity:
+
+![Forge Relay board with live event feed](media/screenshot-board.jpg)
+
+**Start an agent session** — pick which orchestrators participate (Claude Mode A/B, or Codex via its own MCP session):
+
+![Start Agent Session dialog](media/screenshot-session.jpg)
+
+**Claims and operator controls** — active claims, open commands, and manual STOP / PAUSE / claim / release actions:
+
+![Active claims and operator STOP/PAUSE controls](media/screenshot-controls.jpg)
+
+---
+
 ## Why Forge Relay
 
 When two AI coding agents work on the same repo simultaneously, they will:
@@ -87,6 +103,7 @@ code --extensionDevelopmentPath="/path/to/forge-relay" "/path/to/your/workspace"
 
 Forge Relay does not write MCP config into your workspace or home directory during activation. (One scoped exception: starting a Claude **Mode A** orchestrator maintains the `forgerelay` entry in the workspace `.mcp.json`, so the orchestrator it spawns can find its tools.)
 
+Use **Command Palette -> Forge Relay: Configure Codex** to write the Codex `config.toml` entry automatically (zero-touch setup).
 Use **Command Palette -> Forge Relay: Show MCP Config** to view the exact snippets for this machine.
 Use **Command Palette -> Forge Relay: Verify Setup** to check whether this machine is ready.
 
@@ -99,12 +116,12 @@ Forge Relay handles these automatically once the extension is installed:
 
 You still need to configure these manually for each machine:
 
-- add the Forge Relay MCP block to Codex `config.toml`
+- add the Forge Relay MCP block to Codex `config.toml` — or just run **Forge Relay: Configure Codex** to write it for you
 - add the Forge Relay MCP block to the Claude `settings.json` file you want to use
 
-Reason: Forge Relay intentionally does not silently edit user home config or workspace agent settings during activation.
+Reason: Forge Relay intentionally does not silently edit user home config or workspace agent settings during activation. (The **Configure Codex** command is an explicit, user-invoked exception: it writes the `[mcp_servers.forgerelay]` entry on demand, never clobbers an existing one, and omits a global `--repoRoot`.)
 
-Codex typically uses `~/.codex/config.toml`:
+Codex typically uses `~/.codex/config.toml`. Run **Forge Relay: Configure Codex** to create this automatically, or add it by hand:
 
 ```toml
 [mcp_servers.forgerelay]
@@ -182,7 +199,8 @@ Forge Relay now treats Forge as the normal routing surface for worker models.
 
 - pass a plain Forge-exposed model name to `dispatch_subagent` in normal use
 - local Forge-managed GGUF models route through Forge control
-- provider-backed Forge-exposed models route through the Forge bridge
+- provider-backed Forge-exposed models (xAI, OpenRouter, etc.) route through Forge's in-host `POST /chat` proxy, so their API keys never leave the Forge extension host
+- a trailing `@profile` (e.g. `gemma4:31b@long-ctx`) is carried through to Forge for request-time profile resolution; the base model is what gets pooled
 - explicit `forge:` / `bridge:` / `ollama:` / `direct:` prefixes are still valid, but they are override/debug paths rather than the normal workflow
 - use `list_models` to inspect the merged Forge-first catalog before dispatching unfamiliar models
 
@@ -298,7 +316,10 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 |---|---|
 | `Forge Relay: Open Board (Tab)` | Open the board as a full editor tab for a larger view |
 | `Forge Relay: STOP All Agents` | Post an immediate STOP command targeting all agents |
+| `Forge Relay: Configure Codex` | Write the `[mcp_servers.forgerelay]` entry into `~/.codex/config.toml` automatically (zero-touch Codex setup; never clobbers an existing entry) |
 | `Forge Relay: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
+| `Forge Relay: Verify Setup` | Check whether Codex and Claude MCP config are correctly wired on this machine |
+| `Forge Relay: Toggle Clanker Mode` | Switch workers between read-only draft mode and write/edit/run (Clanker) mode |
 
 ---
 

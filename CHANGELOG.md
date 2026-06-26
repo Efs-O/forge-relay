@@ -2,6 +2,38 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.3.25
+
+- Added a **Forge Relay: Configure Codex** command so Codex setup is zero-touch
+  like Claude's. It writes the `[mcp_servers.forgerelay]` entry into
+  `~/.codex/config.toml` (creating the file/dir if needed), deliberately without
+  a global `--repoRoot` so each Codex workspace keeps its own board. It never
+  clobbers an existing entry — if one is present it reports it and offers to open
+  the file or run Verify Setup. New users no longer have to hand-edit Codex
+  config.
+
+## 0.3.24
+
+- Closed the second path that could write `.coordination` into a VS Code install
+  dir. 0.3.23 only guarded the in-extension HTTP server; the standalone stdio MCP
+  server (`mcpStdio.ts`) still fell back to `process.cwd()`, which is the install
+  dir when Codex/Claude spawned it without a real workspace — so it kept
+  recreating the board (and the os error 5 update failure). The install-dir check
+  is now a shared helper (`vscodeInstallDir.ts`) used by both paths; the headless
+  stdio server redirects the board to a per-user fallback
+  (`~/.forge-relay/orphan-board`) instead of poisoning the install dir.
+
+## 0.3.23
+
+- Fixed a recurring VS Code update failure ("There was an error while Deleting a
+  directory ... `.coordination`: Access is denied (os error 5)"). If the VS Code
+  install folder was ever opened as a workspace, Forge Relay created its
+  `.coordination` board there and kept `mcpstdio.log` open, so the auto-updater
+  could never delete that directory. Activation now detects a VS Code
+  installation directory (launcher plus `resources/app/product.json`) and
+  refuses to coordinate it, surfacing a warning instead of writing the board.
+  Normal project workspaces are unaffected.
+
 ## 0.3.19
 
 - Fixed colon-id routing: an unprefixed Ollama-style model id (e.g.
