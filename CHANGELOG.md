@@ -2,6 +2,17 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.3.23
+
+- Fixed a recurring VS Code update failure ("There was an error while Deleting a
+  directory ... `.coordination`: Access is denied (os error 5)"). If the VS Code
+  install folder was ever opened as a workspace, Forge Relay created its
+  `.coordination` board there and kept `mcpstdio.log` open, so the auto-updater
+  could never delete that directory. Activation now detects a VS Code
+  installation directory (launcher plus `resources/app/product.json`) and
+  refuses to coordinate it, surfacing a warning instead of writing the board.
+  Normal project workspaces are unaffected.
+
 ## 0.3.19
 
 - Fixed colon-id routing: an unprefixed Ollama-style model id (e.g.

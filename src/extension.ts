@@ -18,6 +18,21 @@ let runtimeManager: RuntimeManager | null = null;
 
 const ROSTER_KEY = 'forgeRelay.sessionRoster';
 
+/**
+ * True when `dir` looks like a VS Code installation root (portable or system).
+ * Detected by the Code launcher plus the bundled product.json, so we never drop
+ * a .coordination board where the auto-updater needs to delete files.
+ */
+function isVsCodeInstallDir(dir: string): boolean {
+    if (!dir) {
+        return false;
+    }
+    const launchers = ['Code.exe', 'code', 'Code - Insiders.exe', 'code-insiders'];
+    const hasLauncher = launchers.some(name => fs.existsSync(path.join(dir, name)));
+    const hasAppProduct = fs.existsSync(path.join(dir, 'resources', 'app', 'product.json'));
+    return hasLauncher && hasAppProduct;
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
     if (!workspaceRoot) {
@@ -29,6 +44,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const desiredPort = config.get<number>('port', 7878);
     const coordPath = config.get<string>('coordinationPath', '').trim();
     const repoRoot = coordPath || workspaceRoot;
+
+    // Never write the .coordination board into a VS Code installation directory.
+    // Doing so leaves the MCP server holding mcpstdio.log open inside the folder
+    // the auto-updater must wipe, which makes every update fail with os error 5
+    // ("Access is denied" deleting .coordination). Bail out cleanly instead.
+    if (isVsCodeInstallDir(repoRoot)) {
+        vscode.window.showWarningMessage(
+            `Forge Relay: refusing to coordinate the VS Code install folder ` +
+            `(${repoRoot}). Open your project folder instead, or set ` +
+            `"forgeRelay.coordinationPath" to a real repo.`,
+        );
+        return;
+    }
 
     // "Forge Relay" Output channel: a single place to watch managed-bridge output
     // (startup banners, [[AW_STATUS]] transitions, telemetry lines, crashes) from

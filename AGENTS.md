@@ -121,6 +121,16 @@ pwsh scripts/agent-bridge.ps1 -Action history -Agent <agent-name>
 pwsh scripts/agent-bridge.ps1 -Action status  -Agent <agent-name>
 ```
 
+## Coordination-dir safety invariant
+
+The board lives at `<repoRoot>/.coordination`, where `repoRoot` is
+`forgeRelay.coordinationPath` or the first workspace folder (`src/extension.ts`).
+Activation **must never** create `.coordination` inside a VS Code installation
+directory: the MCP server holds `mcpstdio.log` open, which blocks the portable
+auto-updater from deleting that folder ("Access is denied (os error 5)").
+`isVsCodeInstallDir()` guards this (launcher + `resources/app/product.json`) and
+bails out. Do not weaken or remove that guard.
+
 ## This protocol is not optional.
 
 It is the current operating protocol for parallel work in this repo.
