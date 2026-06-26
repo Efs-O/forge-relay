@@ -2,9 +2,10 @@
   "name": "forge-relay",
   "displayName": "Forge Relay",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.3.22",
+  "version": "0.3.25",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
+  "preview": true,
   "icon": "media/forge-relay-logo-128.png",
   "galleryBanner": {
     "color": "#1a1a2e",
@@ -14,6 +15,10 @@
     "type": "git",
     "url": "https://github.com/Efs-O/forge-relay"
   },
+  "bugs": {
+    "url": "https://github.com/Efs-O/forge-relay/issues"
+  },
+  "homepage": "https://github.com/Efs-O/forge-relay#readme",
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -72,6 +77,10 @@
       {
         "command": "forgeRelay.verifySetup",
         "title": "Forge Relay: Verify Setup"
+      },
+      {
+        "command": "forgeRelay.configureCodex",
+        "title": "Forge Relay: Configure Codex"
       },
       {
         "command": "forgeRelay.toggleClanker",

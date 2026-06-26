@@ -70,6 +70,19 @@ resident lacks (vision, much stronger model).
 - `gemma4-12b-it-ud-q4kxl` — won't load while another GGUF holds the VRAM slot
   (`llama-server exit 1`). Only load a fresh local GGUF when the slot is free.
 
+**Local Qwen MTP workers — dispatch the `-worker` fork, NOT `@worker`.** On the
+MTP GGUFs (`qwen36-35b-a3b-mtp-iq3s`, `qwen36-27b-mtp-q3km`), MTP draft +
+reasoning-budget leaves the final `content` empty (all output lands in
+`reasoning_content`), which the probe rejects. The fix is a spawn-time
+`--reasoning off`, which lives in dedicated model entries in Forge's config:
+- `qwen36-35b-a3b-mtp-iq3s-worker`
+- `qwen36-27b-mtp-q3km-worker`
+
+Dispatch these names directly (request-time `think:false` is baked in — no
+`@worker` suffix needed). `…-mtp-iq3s@worker` / `…-mtp-q3km@worker` only change
+the request, not the launch, so they still return empty content — do not use
+them. The non-MTP `qwen36-27b-q3km@worker` is unaffected and stays as-is.
+
 ---
 
 ## Verification — trust the isolated run, not the worker
