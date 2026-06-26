@@ -12,26 +12,12 @@ import { RuntimeManager } from './runtimeManager';
 import { subagentEnvFromBackends } from './subagent';
 import { RuntimeStatus } from './runtimeBridge';
 import { BoardEvent, ClaudeMode, SessionRoster } from './types';
+import { isVsCodeInstallDir } from './vscodeInstallDir';
 
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
 
 const ROSTER_KEY = 'forgeRelay.sessionRoster';
-
-/**
- * True when `dir` looks like a VS Code installation root (portable or system).
- * Detected by the Code launcher plus the bundled product.json, so we never drop
- * a .coordination board where the auto-updater needs to delete files.
- */
-function isVsCodeInstallDir(dir: string): boolean {
-    if (!dir) {
-        return false;
-    }
-    const launchers = ['Code.exe', 'code', 'Code - Insiders.exe', 'code-insiders'];
-    const hasLauncher = launchers.some(name => fs.existsSync(path.join(dir, name)));
-    const hasAppProduct = fs.existsSync(path.join(dir, 'resources', 'app', 'product.json'));
-    return hasLauncher && hasAppProduct;
-}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;

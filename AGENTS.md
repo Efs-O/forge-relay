@@ -125,11 +125,15 @@ pwsh scripts/agent-bridge.ps1 -Action status  -Agent <agent-name>
 
 The board lives at `<repoRoot>/.coordination`, where `repoRoot` is
 `forgeRelay.coordinationPath` or the first workspace folder (`src/extension.ts`).
-Activation **must never** create `.coordination` inside a VS Code installation
+Neither board-creating path — the in-extension HTTP server (`extension.ts`) nor
+the standalone stdio MCP server (`mcpStdio.ts`, which falls back to
+`process.cwd()`) — may create `.coordination` inside a VS Code installation
 directory: the MCP server holds `mcpstdio.log` open, which blocks the portable
-auto-updater from deleting that folder ("Access is denied (os error 5)").
-`isVsCodeInstallDir()` guards this (launcher + `resources/app/product.json`) and
-bails out. Do not weaken or remove that guard.
+auto-updater from deleting that folder ("Access is denied (os error 5)"). The
+shared `isVsCodeInstallDir()` helper in `vscodeInstallDir.ts` guards both
+(launcher + `resources/app/product.json`): the extension bails with a warning,
+the headless stdio server redirects to `fallbackCoordinationRoot()`. Do not
+weaken or remove that guard, and keep both call sites using the shared helper.
 
 ## This protocol is not optional.
 

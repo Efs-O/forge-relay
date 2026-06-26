@@ -2,6 +2,17 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.3.24
+
+- Closed the second path that could write `.coordination` into a VS Code install
+  dir. 0.3.23 only guarded the in-extension HTTP server; the standalone stdio MCP
+  server (`mcpStdio.ts`) still fell back to `process.cwd()`, which is the install
+  dir when Codex/Claude spawned it without a real workspace — so it kept
+  recreating the board (and the os error 5 update failure). The install-dir check
+  is now a shared helper (`vscodeInstallDir.ts`) used by both paths; the headless
+  stdio server redirects the board to a per-user fallback
+  (`~/.forge-relay/orphan-board`) instead of poisoning the install dir.
+
 ## 0.3.23
 
 - Fixed a recurring VS Code update failure ("There was an error while Deleting a
