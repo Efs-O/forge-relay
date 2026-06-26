@@ -2,7 +2,7 @@
   "name": "forge-relay",
   "displayName": "Forge Relay",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.3.24",
+  "version": "0.3.25",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "preview": true,
@@ -77,6 +77,10 @@
       {
         "command": "forgeRelay.verifySetup",
         "title": "Forge Relay: Verify Setup"
+      },
+      {
+        "command": "forgeRelay.configureCodex",
+        "title": "Forge Relay: Configure Codex"
       },
       {
         "command": "forgeRelay.toggleClanker",

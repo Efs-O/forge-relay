@@ -175,6 +175,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             await vscode.window.showTextDocument(doc);
         }),
 
+        vscode.commands.registerCommand('forgeRelay.configureCodex', async () => {
+            const result = configureCodexMcp(context.extensionUri.fsPath);
+            const fwd = toForwardSlashes(result.path);
+            const openConfig = async (): Promise<void> => {
+                const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(result.path));
+                await vscode.window.showTextDocument(doc);
+            };
+            if (result.status === 'error') {
+                vscode.window.showErrorMessage(`Forge Relay: could not write Codex config (${fwd}): ${result.detail}`);
+                return;
+            }
+            if (result.status === 'already') {
+                const action = await vscode.window.showInformationMessage(
+                    `Forge Relay: Codex is already configured in ${fwd}.`, 'Open config', 'Verify Setup');
+                if (action === 'Open config') { await openConfig(); }
+                else if (action === 'Verify Setup') { vscode.commands.executeCommand('forgeRelay.verifySetup'); }
+                return;
+            }
+            const verb = result.status === 'created' ? 'Created' : 'Updated';
+            const action = await vscode.window.showInformationMessage(
+                `Forge Relay: ${verb} Codex MCP config at ${fwd}. Restart Codex to pick it up.`, 'Open config');
+            if (action === 'Open config') { await openConfig(); }
+        }),
+
         runtimeStatusBar,
 
         {
@@ -280,7 +304,7 @@ function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number
         '',
         '## What you still need to configure manually on each machine',
         '',
-        '- Add the Forge Relay MCP entry to Codex `config.toml` without hardwiring `--repoRoot` in the global entry.',
+        '- Codex: run `Forge Relay: Configure Codex` to write the entry automatically, or paste the snippet below into `config.toml` (without hardwiring `--repoRoot` in the global entry).',
         '- Add the Forge Relay MCP entry to the Claude `settings.json` file you want to use.',
         '- Run `Forge Relay: Verify Setup` after configuring both tools.',
         '',
@@ -374,6 +398,49 @@ function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort
 
 function getStdioPath(extensionPath: string): string {
     return toForwardSlashes(path.join(extensionPath, 'out', 'mcpStdio.js'));
+}
+
+type CodexConfigResult = {
+    status: 'created' | 'appended' | 'already' | 'error';
+    path: string;
+    detail?: string;
+};
+
+/**
+ * Write the `[mcp_servers.forgerelay]` entry into the user's Codex config.toml,
+ * so Codex setup is zero-touch like Claude's. Deliberately omits a global
+ * `--repoRoot` (Codex resolves the board from its workspace cwd; a hardwired
+ * root would make every workspace share one board — see buildMcpConfig). Never
+ * clobbers an existing entry: if one is present we leave it and report `already`.
+ */
+function configureCodexMcp(extensionPath: string): CodexConfigResult {
+    const configPath = getCodexConfigPath();
+    const stdioPath = getStdioPath(extensionPath);
+    const block = [
+        '[mcp_servers.forgerelay]',
+        'command = "node"',
+        `args = ["${stdioPath}"]`,
+        '',
+    ].join('\n');
+    try {
+        const dir = path.dirname(configPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        if (!fs.existsSync(configPath)) {
+            fs.writeFileSync(configPath, block, 'utf8');
+            return { status: 'created', path: configPath };
+        }
+        const existing = fs.readFileSync(configPath, 'utf8');
+        if (hasCodexForgeRelayConfig(existing)) {
+            return { status: 'already', path: configPath };
+        }
+        const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : '\n';
+        fs.appendFileSync(configPath, prefix + block, 'utf8');
+        return { status: 'appended', path: configPath };
+    } catch (err) {
+        return { status: 'error', path: configPath, detail: err instanceof Error ? err.message : String(err) };
+    }
 }
 
 function getCodexConfigPath(): string {

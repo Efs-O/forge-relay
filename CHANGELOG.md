@@ -2,6 +2,16 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.3.25
+
+- Added a **Forge Relay: Configure Codex** command so Codex setup is zero-touch
+  like Claude's. It writes the `[mcp_servers.forgerelay]` entry into
+  `~/.codex/config.toml` (creating the file/dir if needed), deliberately without
+  a global `--repoRoot` so each Codex workspace keeps its own board. It never
+  clobbers an existing entry — if one is present it reports it and offers to open
+  the file or run Verify Setup. New users no longer have to hand-edit Codex
+  config.
+
 ## 0.3.24
 
 - Closed the second path that could write `.coordination` into a VS Code install
