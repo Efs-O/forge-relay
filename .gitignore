@@ -21,6 +21,7 @@ docs/TODO-forge-concurrency-hardening.md
 docs/TODO-REVERT-ENV-PROBE-BEFORE-PUBLISH.md
 .claude.disabled/
 MCP.txt
+FORGE_RELAY_LATENCY_REPORT.md
 rps/
 tictactoe/
 docs/internal/
