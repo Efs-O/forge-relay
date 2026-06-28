@@ -206,6 +206,16 @@ body {
     align-items: flex-start;
     gap: 10px;
     margin-bottom: 12px;
+    /* Let the right-hand actions (session picker, New Session, Clear) drop to a
+       second line in a narrow sidebar instead of clipping off the panel edge. */
+    flex-wrap: wrap;
+}
+
+/* The title block must be allowed to shrink below its content width, otherwise a
+   flex item's default min-width:auto keeps the row wider than the panel and the
+   actions still clip even with wrap enabled. */
+.section-head > div {
+    min-width: 0;
 }
 
 .section-head h2,
@@ -426,12 +436,14 @@ body {
     display: flex;
     gap: 8px;
     align-items: center;
-    flex-shrink: 0;
+    /* Wrap the picker/buttons among themselves when the row itself is narrow. */
+    flex-wrap: wrap;
 }
 
 .feed-actions select#session-picker {
     width: auto;
     max-width: 200px;
+    min-width: 0;
     padding: 6px 8px;
     font-size: 0.78rem;
 }
@@ -662,5 +674,16 @@ button.warning {
 
     .topbar-meta {
         align-items: flex-start;
+    }
+
+    /* In a narrow sidebar the feed actions take their own full-width row under
+       the title, with the session picker stretching to fill it. */
+    .feed-actions {
+        width: 100%;
+    }
+
+    .feed-actions select#session-picker {
+        flex: 1 1 auto;
+        max-width: none;
     }
 }
