@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Bridge } from './bridge';
 import { EventTail } from './eventTail';
 import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
@@ -78,7 +78,7 @@ const subagentBackends: SubagentBackends = {
 
 const server = new Server(
     { name: 'forgerelay', version: '0.1.0' },
-    { capabilities: { tools: {}, logging: {} } }
+    { capabilities: { tools: {}, resources: {}, logging: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -147,6 +147,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         LIST_MODELS_TOOL,
     ],
 }));
+
+// Codex's MCP client probes resources/list and resources/templates/list at
+// connect. Forge Relay is tools-only, so without these handlers the SDK answers
+// -32601 Method not found and Codex logs two warnings on every connect. Declaring
+// the resources capability above and returning empty lists here gives Codex a
+// clean, valid (empty) catalog instead of an error. Claude-class clients that DO
+// consume resources simply see none — no behavioural change, just no noise.
+server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [] }));
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [] }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;

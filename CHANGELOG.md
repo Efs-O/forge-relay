@@ -2,6 +2,18 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.3.26
+
+- The stdio MCP server now answers Codex's `resources/list` and
+  `resources/templates/list` probes with empty lists (and declares the
+  `resources` capability) instead of returning `-32601 Method not found`. Forge
+  Relay is tools-only, so Codex logged two warnings on every connect; this gives
+  it a clean empty catalog and silences the noise. No behavioural change for
+  Claude-class clients.
+- Board webview: the feed/section header actions (session picker, New Session,
+  Clear) now wrap to a second line in a narrow sidebar instead of being clipped
+  off the panel edge.
+
 ## 0.3.25
 
 - Added a **Forge Relay: Configure Codex** command so Codex setup is zero-touch
