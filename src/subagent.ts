@@ -1,4 +1,5 @@
 import { Bridge } from './bridge';
+import { probeCodexCli } from './codexWorker';
 
 /**
  * Local/cloud model backends a subagent can target. All three speak the
@@ -43,6 +44,10 @@ export interface SubagentBackends {
     ollamaAutoStart?: boolean;
     /** Executable for ollama auto-start (default `ollama` on PATH). */
     ollamaExecutable?: string;
+    /** Codex CLI executable for the `codex:` worker backend (default `codex` on PATH). */
+    codexExecutable?: string;
+    /** Wall-clock cap for one `codex exec` worker run (default 15 min). */
+    codexTimeoutMs?: number;
 }
 
 export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
@@ -71,6 +76,8 @@ export function subagentEnvFromBackends(backends: SubagentBackends): Record<stri
     if (backends.defaultRunMode) { env.FORGERELAY_DEFAULT_MODE = backends.defaultRunMode; }
     if (backends.ollamaAutoStart) { env.FORGERELAY_OLLAMA_AUTO_START = '1'; }
     if (backends.ollamaExecutable) { env.FORGERELAY_OLLAMA_EXECUTABLE = backends.ollamaExecutable; }
+    if (backends.codexExecutable) { env.FORGERELAY_CODEX_EXECUTABLE = backends.codexExecutable; }
+    if (backends.codexTimeoutMs) { env.FORGERELAY_CODEX_TIMEOUT_MS = String(backends.codexTimeoutMs); }
     return env;
 }
 
@@ -745,6 +752,14 @@ export async function forgeHealthz(controlUrl: string): Promise<boolean> {
     }
 }
 
+/** One line advertising the Codex CLI worker when the CLI is installed. */
+function codexWorkerLine(backends: SubagentBackends): string {
+    const probe = probeCodexCli(backends.codexExecutable);
+    return probe.ok
+        ? `\n\nCODEX WORKER: ${probe.detail} detected — dispatch with model "codex" (or "codex:<model>") to run the task via codex exec, sandboxed by board autonomy.`
+        : '';
+}
+
 /** Human-readable model menu for the list_models tool. */
 export async function handleListModels(backends: SubagentBackends): Promise<string> {
     if (backends.forgeControlUrl) {
@@ -778,7 +793,7 @@ export async function handleListModels(backends: SubagentBackends): Promise<stri
             'DEBUG OVERRIDES:',
             '  Explicit route prefixes still work: forge:<model>, bridge:<model>, ollama:<model>, direct:<model>.',
             '  Unprefixed ids resolve through the Forge-exposed catalogs first; ambiguous names must be disambiguated explicitly and there is no silent raw fallback.',
-        ].join('\n');
+        ].join('\n') + codexWorkerLine(backends);
     }
 
     const results = await listModels(backends);
@@ -792,7 +807,7 @@ export async function handleListModels(backends: SubagentBackends): Promise<stri
     const forgeNote = backends.forgeControlUrl
         ? `\n\nForge route is ON (${backends.forgeControlUrl}): unprefixed or "forge:<model>" ids load on demand via Forge and dispatch only once the model is warm.`
         : '';
-    return `AVAILABLE WORKER MODELS — pass to dispatch_subagent as "<backend>:<model>":\n\n${blocks.join('\n\n')}${forgeNote}`;
+    return `AVAILABLE WORKER MODELS — pass to dispatch_subagent as "<backend>:<model>":\n\n${blocks.join('\n\n')}${forgeNote}${codexWorkerLine(backends)}`;
 }
 
 export const LIST_MODELS_TOOL = {
@@ -908,16 +923,19 @@ function oneLine(text: string): string {
 export const DISPATCH_SUBAGENT_TOOL = {
     name: 'dispatch_subagent',
     description:
-        'Delegate a self-contained task to a local model worker (Forge/Ollama/llama.cpp), like a Task subagent. '
+        'Delegate a self-contained task to a worker, like a Task subagent. '
         + 'Returns the worker result and posts its lifecycle to the Forge Relay board as worker:<model>. '
-        + 'Pass a plain Forge-exposed model name for normal routing, or an explicit override such as "forge:<model>", "bridge:<model>", "ollama:<model>", or "direct:<model>" for debugging. '
+        + 'Workers can be local models (pass a plain Forge-exposed model name, or an explicit "forge:", "bridge:", "ollama:", "direct:" override) '
+        + 'or the Codex CLI: model "codex" (or "codex:<model>" to pick a Codex model) runs the task via `codex exec` in the repo, '
+        + 'sandboxed by board autonomy (draft = read-only, clanker = workspace-write). '
         + 'When the Forge route is enabled, unprefixed ids resolve through the Forge-exposed catalogs first: local models go through Forge control and provider-backed models go through the Forge bridge. '
-        + 'tools: "none" = reasoning-only single completion; "readonly" = read/search + propose_diff (no writes); "full" = read/write/edit/run, bounded by the destructive-command denylist and the board autonomy mode.',
+        + 'tools: "none" = reasoning-only single completion; "readonly" = read/search + propose_diff (no writes); "full" = read/write/edit/run, bounded by the destructive-command denylist and the board autonomy mode. '
+        + 'The tools tier does not apply to codex workers (Codex brings its own tools inside its sandbox).',
     inputSchema: {
         type: 'object',
         properties: {
             agent: { type: 'string', description: 'Your agent identity dispatching the worker (claude, codex).' },
-            model: { type: 'string', description: 'Worker model id. Prefer a plain Forge-exposed name; raw prefixes are explicit overrides.' },
+            model: { type: 'string', description: 'Worker model id. Prefer a plain Forge-exposed name for local models, or "codex" / "codex:<model>" for a Codex CLI worker; raw prefixes are explicit overrides.' },
             task: { type: 'string', description: 'The self-contained instruction for the worker.' },
             context: { type: 'string', description: 'Optional inline context for the worker.' },
             tools: { type: 'string', enum: ['none', 'readonly', 'full'], description: 'Worker capability tier: none=reasoning only; readonly=read+propose_diff; full=read/write/edit/run.' },

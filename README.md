@@ -1,10 +1,10 @@
 # Forge Relay
 
-**Open-source infrastructure for multi-agent software maintenance workflows.**
+**Running Claude Code and Codex on the same project? Forge Relay stops them from overwriting each other's work — and gives you one panel to watch every agent, with a STOP button that actually works.**
 
-Forge Relay gives maintainers a shared control plane for coordinating coding agents on the same repository. It supports Codex, Claude, and other MCP-capable agents, with file-level claims, a live event feed, operator STOP/PAUSE controls, and a persistent activity log in VS Code.
+Agents claim files before editing, conflicting claims are blocked, every action lands in a live audit feed in VS Code, and the operator can STOP or PAUSE any agent at any time. It works with any MCP-capable agent (Claude Code, Codex CLI, Aider, …), with zero cloud dependencies — all state is plain JSON files in your workspace.
 
-It can also route delegated work to optional local-model workers through Forge-managed or OpenAI-compatible backends, so maintainers can offload lower-cost background tasks without giving up visibility or control.
+On top of the safety layer, orchestrators get a `dispatch_subagent` tool for delegating work orders to cheaper workers: the **Codex CLI** (frontier-quality, flat-rate on a ChatGPT subscription) or **local models** (free, via Forge/Ollama/llama.cpp) — with the worker's lifecycle, file claims, and results all visible on the same board.
 
 ---
 
@@ -52,6 +52,7 @@ This is intentionally not a Codex-only or Claude-only wrapper. Forge Relay is bu
 - **Event feed** - append-only log of every claim, release, post, command, and acknowledgement
 - **STOP / PAUSE** - operator commands with agent acknowledgement flow
 - **Codex + Claude support** - designed for mixed-agent workflows, not a single-vendor path
+- **Codex worker dispatch** - `dispatch_subagent` with model `codex` runs a sandboxed `codex exec` work order, with the full board lifecycle
 - **Optional local worker offload** - route delegated tasks to Forge-managed or OpenAI-compatible local backends
 - **Cross-tool** - works with any agent that supports MCP (Claude Code CLI, Codex CLI, Aider, etc.)
 
@@ -103,9 +104,10 @@ code --extensionDevelopmentPath="/path/to/forge-relay" "/path/to/your/workspace"
 
 Forge Relay does not write MCP config into your workspace or home directory during activation. (One scoped exception: starting a Claude **Mode A** orchestrator maintains the `forgerelay` entry in the workspace `.mcp.json`, so the orchestrator it spawns can find its tools.)
 
-Use **Command Palette -> Forge Relay: Configure Codex** to write the Codex `config.toml` entry automatically (zero-touch setup).
-Use **Command Palette -> Forge Relay: Show MCP Config** to view the exact snippets for this machine.
-Use **Command Palette -> Forge Relay: Verify Setup** to check whether this machine is ready.
+Use **Command Palette -> Forge Relay: Get Started** for one-shot onboarding: it configures Codex and Claude, then opens the verification report.
+Or run the pieces individually:
+**Forge Relay: Configure Codex** writes the Codex `config.toml` entry; **Forge Relay: Configure Claude** writes the Claude `settings.json` entry;
+**Forge Relay: Show MCP Config** shows the exact snippets for this machine; **Forge Relay: Verify Setup** checks whether this machine is ready.
 
 ### First-time setup on a new machine
 
@@ -114,12 +116,12 @@ Forge Relay handles these automatically once the extension is installed:
 - ships its own UI metadata such as icons and commands
 - starts the local Forge Relay MCP server when VS Code opens the workspace
 
-You still need to configure these manually for each machine:
+You still need to wire the agents once per machine — run **Forge Relay: Get Started** to do both at once, or:
 
-- add the Forge Relay MCP block to Codex `config.toml` — or just run **Forge Relay: Configure Codex** to write it for you
-- add the Forge Relay MCP block to the Claude `settings.json` file you want to use
+- add the Forge Relay MCP block to Codex `config.toml` — or run **Forge Relay: Configure Codex** to write it for you
+- add the Forge Relay MCP block to Claude `settings.json` — or run **Forge Relay: Configure Claude** to write it for you
 
-Reason: Forge Relay intentionally does not silently edit user home config or workspace agent settings during activation. (The **Configure Codex** command is an explicit, user-invoked exception: it writes the `[mcp_servers.forgerelay]` entry on demand, never clobbers an existing one, and omits a global `--repoRoot`.)
+Reason: Forge Relay intentionally does not silently edit user home config or workspace agent settings during activation. (The **Configure Codex** / **Configure Claude** / **Get Started** commands are explicit, user-invoked exceptions: they write the `forgerelay` entry on demand and never clobber an existing one.)
 
 Codex typically uses `~/.codex/config.toml`. Run **Forge Relay: Configure Codex** to create this automatically, or add it by hand:
 
@@ -158,20 +160,26 @@ Add or merge this into the Claude settings file you want to use:
 
 If Claude stops launching after a workspace-level config change, rename workspace `.claude/settings.json` first, then `.claude/settings.local.json` if needed. Prefer renaming over deleting so rollback is immediate.
 
-### Codex: MCP-only, by design
+### Codex as an orchestrator: MCP-only, by design
 
 Codex participates on the board through the `forgerelay` MCP entry in its own
 `~/.codex/config.toml` (see the setup snippet above). Forge Relay **never
-launches a Codex process**.
+launches a long-lived Codex process**.
 
-Why: a headless `codex app-server` spawned by Relay would be a *second* Codex
-process on the same ChatGPT OAuth login as your sidebar/IDE Codex session.
-OpenAI's auth treats that as token reuse (`refresh_token_reused` /
-`token_revoked`) and kills **both** sessions server-side. There is no Relay-side
-fix; running headless Codex would require separate API-key credentials. The
-earlier managed Codex bridge (`scripts/codex-auto-bridge.js`) was removed for
-this reason — it survives in git history if API-key-based revival is ever
-wanted.
+Why: a headless `codex app-server` spawned by Relay would be a *second*
+persistent Codex process on the same ChatGPT OAuth login as your sidebar/IDE
+Codex session. OpenAI's auth treats that as token reuse
+(`refresh_token_reused` / `token_revoked`) and kills **both** sessions
+server-side. There is no Relay-side fix; running a headless Codex orchestrator
+would require separate API-key credentials. The earlier managed Codex bridge
+(`scripts/codex-auto-bridge.js`) was removed for this reason — it survives in
+git history if API-key-based revival is ever wanted.
+
+The **Codex worker backend** is different: each `dispatch_subagent` with model
+`"codex"` runs one short-lived `codex exec` work order that exits when the task
+finishes. Short sequential exec runs coexist with an interactive Codex session
+in practice; if you ever hit token-rotation errors, run codex workers while the
+interactive Codex sidebar is closed, or use API-key billing for the CLI.
 
 Codex log noise such as `codex_apps` / `chatgpt.com/backend-api/wham/apps`
 timeouts comes from Codex's own ChatGPT connectors/apps feature, not Forge
@@ -193,9 +201,25 @@ Agents call these tools natively as part of their reasoning loop. No manual rela
 | `ack_command` | Acknowledge a STOP or PAUSE command. Always call this before stopping work. |
 | `resolve_command` | Mark a command as resolved once work has stopped. |
 
+### Codex as a worker
+
+`dispatch_subagent` can hand a work order to the **Codex CLI** — no local model
+required:
+
+- model `"codex"` runs the task via `codex exec` in the coordinated repo with
+  your Codex CLI default model; `"codex:<model>"` picks a specific one
+- the worker is sandboxed by board autonomy: **draft** → `--sandbox read-only`
+  (investigate and report), **clanker** → `--sandbox workspace-write` (edit and
+  run inside the workspace); Relay never bypasses Codex's sandbox
+- lifecycle lands on the board like any worker (`worker-N:codex` started/done
+  posts), board STOP/PAUSE kills the run, and `mode:"async"` fan-out works
+- requires the Codex CLI (`npm i -g @openai/codex`) and an existing Codex
+  login; each dispatch is a short-lived `codex exec` process (see the OAuth
+  note below), capped by `forgeRelay.codexWorkerTimeoutMs` (default 15 min)
+
 ### Worker routing contract
 
-Forge Relay now treats Forge as the normal routing surface for worker models.
+Forge Relay treats Forge as the normal routing surface for local worker models.
 
 - pass a plain Forge-exposed model name to `dispatch_subagent` in normal use
 - local Forge-managed GGUF models route through Forge control
@@ -293,6 +317,8 @@ For Claude Code, add a pre-tool hook to enforce the pre-flight check automatical
 | `forgeRelay.subagentBridgeApiKey` | `""` | API key for the Forge bridge, if required. |
 | `forgeRelay.subagentOllamaUrl` | `http://127.0.0.1:11434/v1` | Raw Ollama override endpoint. Use mainly for debugging or forced routing. |
 | `forgeRelay.subagentDirectUrl` | `http://127.0.0.1:8080/v1` | Raw llama.cpp override endpoint. Use mainly for debugging or forced routing. |
+| `forgeRelay.codexExecutable` | `""` (= `codex` on PATH) | Codex CLI executable for the `codex` worker backend of `dispatch_subagent`. |
+| `forgeRelay.codexWorkerTimeoutMs` | `900000` | Wall-clock cap for one `codex exec` worker run (15 min); the process is killed past it. |
 
 ---
 
@@ -316,7 +342,9 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 |---|---|
 | `Forge Relay: Open Board (Tab)` | Open the board as a full editor tab for a larger view |
 | `Forge Relay: STOP All Agents` | Post an immediate STOP command targeting all agents |
+| `Forge Relay: Get Started` | One-shot onboarding: configure Codex + Claude, then open the verification report |
 | `Forge Relay: Configure Codex` | Write the `[mcp_servers.forgerelay]` entry into `~/.codex/config.toml` automatically (zero-touch Codex setup; never clobbers an existing entry) |
+| `Forge Relay: Configure Claude` | Write the `forgerelay` MCP entry into `~/.claude/settings.json` (merges into existing JSON; never clobbers an existing entry) |
 | `Forge Relay: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
 | `Forge Relay: Verify Setup` | Check whether Codex and Claude MCP config are correctly wired on this machine |
 | `Forge Relay: Toggle Clanker Mode` | Switch workers between read-only draft mode and write/edit/run (Clanker) mode |

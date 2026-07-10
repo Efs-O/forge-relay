@@ -35,7 +35,15 @@ module still red. Done only when the Definition of Done is fully met.
 
 ## Model selection
 
-**Pre-flight probe before Phase 1 (mandatory).** Do NOT trust a model just
+**Codex worker (frontier tier).** `dispatch_subagent` with model `codex` (or
+`codex:<model>`) runs the task via the Codex CLI in the repo — frontier-quality
+output, flat-rate on the ChatGPT subscription, sandboxed by board autonomy
+(draft = read-only, clanker = workspace-write). Use it for tasks that local
+models keep fumbling; no pre-flight probe needed beyond `list_models` showing
+"CODEX WORKER: … detected". It ignores the `tools` tier (Codex brings its own
+tools).
+
+**Pre-flight probe before Phase 1 (mandatory for local/cloud HTTP models).** Do NOT trust a model just
 because it's in the catalog. Send each candidate a trivial probe (`reply PONG`)
 and measure. Reject any model that:
 - errors (HTTP 5xx) or returns **empty** content,

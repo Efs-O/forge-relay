@@ -7,6 +7,10 @@ import {
 } from './subagent';
 import { forgeHolds, forgeSlots } from './forgeHold';
 import { ensureOllamaDaemon } from './daemonSupervisor';
+import {
+    isCodexModel, codexModelOverride, buildCodexPrompt, probeCodexCli, runCodexExec,
+    DEFAULT_CODEX_TIMEOUT_MS,
+} from './codexWorker';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 
 interface OpenAiToolCall {
@@ -212,6 +216,64 @@ export async function handleDispatchSubagent(
         }
     };
     const worker = workerAgentName(model, beginWorkerRun());
+
+    // Codex CLI worker — `codex` / `codex:<model>` runs the task as one
+    // `codex exec` work order in the repo, sandboxed by board autonomy. It never
+    // touches the OpenAI-compatible HTTP routing below (Codex brings its own
+    // agentic loop and tools), but shares the full board lifecycle: started/done
+    // posts, STOP/PAUSE abort, async @mention wake, worker numbering.
+    if (isCodexModel(model)) {
+        const probe = probeCodexCli(backends.codexExecutable);
+        if (!probe.ok) {
+            finishWorkerRun();
+            return `SUBAGENT not dispatched (${model}) — Codex CLI not available (${probe.detail}). Install it (npm i -g @openai/codex) or set forgeRelay.codexExecutable.`;
+        }
+        const subagentId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        const autonomy: WorkerAutonomy = bridge.getAutonomyMode();
+        const sandbox = autonomy === 'clanker' ? 'workspace-write' as const : 'read-only' as const;
+        const checkpoint = autonomy === 'clanker' ? gitCheckpoint(bridge.getRepoRoot()) : 'draft mode (read-only sandbox)';
+        bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (codex exec, sandbox ${sandbox}, ${probe.detail}): ${task} | ${checkpoint}`));
+
+        const runCodex = async (mentionDispatcher: boolean): Promise<string> => {
+            const wake = mentionDispatcher ? `${dispatcher}: ` : '';
+            try {
+                const res = await runCodexExec({
+                    executable: backends.codexExecutable,
+                    repoRoot: bridge.getRepoRoot(),
+                    prompt: buildCodexPrompt(task, context, sandbox),
+                    model: codexModelOverride(model),
+                    sandbox,
+                    timeoutMs: backends.codexTimeoutMs ?? DEFAULT_CODEX_TIMEOUT_MS,
+                    shouldAbort: () => {
+                        const blocking = bridge.getBlockingCommands(worker);
+                        return blocking.length ? `board STOP/PAUSE (${blocking[0].text})` : null;
+                    },
+                });
+                if (res.aborted) {
+                    bridge.post(worker, formatWorkerPost(`${wake}aborted [${subagentId.slice(0, 10)}]: ${res.aborted}`));
+                    return `SUBAGENT ${subagentId} (${model}) ABORTED: ${res.aborted}${res.output ? `\n\nPartial output:\n${res.output}` : ''}`;
+                }
+                if (!res.ok) {
+                    bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${res.error ?? 'codex exec failed'}`));
+                    return `SUBAGENT ${subagentId} (${model}) ERROR: ${res.error ?? 'codex exec failed'}${res.output ? `\n\nPartial output:\n${res.output}` : ''}`;
+                }
+                bridge.post(worker, formatWorkerPost(`${wake}done [${subagentId.slice(0, 10)}]: ${res.output}`));
+                return `SUBAGENT ${subagentId} (${model}, ${autonomy}) COMPLETED:\n\n${res.output}\n\n[${checkpoint}]`;
+            } catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${error}`));
+                return `SUBAGENT ${subagentId} (${model}) ERROR: ${error}`;
+            } finally {
+                finishWorkerRun();
+            }
+        };
+
+        if (mode === 'async') {
+            void runCodex(true).catch(() => { /* error already posted to the board */ });
+            return `SUBAGENT ${subagentId} (${model}, ${autonomy}) DISPATCHED (async). Codex is working in the background as ${worker} and will notify ${dispatcher} on the board when done. [${checkpoint}]`;
+        }
+        return runCodex(false);
+    }
 
     // Resolve the worker endpoint and a teardown hook. The Forge route (opt-in,
     // forgeControlUrl set or a "forge:" prefix) asks Forge to load the model and
