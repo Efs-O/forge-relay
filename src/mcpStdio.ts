@@ -74,6 +74,8 @@ const subagentBackends: SubagentBackends = {
     defaultRunMode: (process.env.FORGERELAY_DEFAULT_MODE as SubagentBackends['defaultRunMode']) || DEFAULT_SUBAGENT_BACKENDS.defaultRunMode,
     ollamaAutoStart: process.env.FORGERELAY_OLLAMA_AUTO_START === '1',
     ollamaExecutable: process.env.FORGERELAY_OLLAMA_EXECUTABLE || undefined,
+    codexExecutable: process.env.FORGERELAY_CODEX_EXECUTABLE || undefined,
+    codexTimeoutMs: Number(process.env.FORGERELAY_CODEX_TIMEOUT_MS) || undefined,
 };
 
 const server = new Server(

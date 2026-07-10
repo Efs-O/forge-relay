@@ -66,6 +66,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         defaultRunMode: config.get<'sync' | 'async'>('subagentDefaultMode', 'sync'),
         ollamaAutoStart: config.get<boolean>('ollamaAutoStart', false),
         ollamaExecutable: config.get<string>('ollamaExecutable', '').trim() || undefined,
+        codexExecutable: config.get<string>('codexExecutable', '').trim() || undefined,
+        codexTimeoutMs: config.get<number>('codexWorkerTimeoutMs', 0) || undefined,
     };
     mcpServer = new McpServer(bridge, subagentBackends);
 
@@ -197,6 +199,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const action = await vscode.window.showInformationMessage(
                 `Forge Relay: ${verb} Codex MCP config at ${fwd}. Restart Codex to pick it up.`, 'Open config');
             if (action === 'Open config') { await openConfig(); }
+        }),
+
+        vscode.commands.registerCommand('forgeRelay.configureClaude', async () => {
+            const result = configureClaudeMcp(mcpServer?.getPort() ?? port);
+            const fwd = toForwardSlashes(result.path);
+            if (result.status === 'error') {
+                vscode.window.showErrorMessage(`Forge Relay: could not write Claude config (${fwd}): ${result.detail}`);
+                return;
+            }
+            if (result.status === 'already') {
+                vscode.window.showInformationMessage(`Forge Relay: Claude is already configured in ${fwd}.`);
+                return;
+            }
+            const verb = result.status === 'created' ? 'Created' : 'Updated';
+            const action = await vscode.window.showInformationMessage(
+                `Forge Relay: ${verb} Claude MCP config at ${fwd}. Restart Claude Code to pick it up.`, 'Open config');
+            if (action === 'Open config') {
+                const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(result.path));
+                await vscode.window.showTextDocument(doc);
+            }
+        }),
+
+        vscode.commands.registerCommand('forgeRelay.getStarted', async () => {
+            // One-shot onboarding: wire both agents, then show the verify report so
+            // the user sees green checks (or exactly what is still missing).
+            const codex = configureCodexMcp(context.extensionUri.fsPath);
+            const claude = configureClaudeMcp(mcpServer?.getPort() ?? port);
+            const summarize = (name: string, r: { status: string; detail?: string }): string => {
+                switch (r.status) {
+                    case 'created': case 'appended': case 'updated': return `${name}: configured`;
+                    case 'already': return `${name}: already configured`;
+                    default: return `${name}: FAILED (${r.detail ?? 'unknown error'})`;
+                }
+            };
+            vscode.window.showInformationMessage(
+                `Forge Relay Get Started — ${summarize('Codex', codex)}; ${summarize('Claude', claude)}. Opening the verification report…`);
+            await vscode.commands.executeCommand('forgeRelay.verifySetup');
         }),
 
         runtimeStatusBar,
@@ -445,6 +484,61 @@ function configureCodexMcp(extensionPath: string): CodexConfigResult {
 
 function getCodexConfigPath(): string {
     return path.join(os.homedir(), '.codex', 'config.toml');
+}
+
+type ClaudeConfigResult = {
+    status: 'created' | 'updated' | 'already' | 'error';
+    path: string;
+    detail?: string;
+};
+
+/**
+ * Write the `forgerelay` MCP entry into the user-level Claude settings
+ * (`~/.claude/settings.json`), the Claude twin of `configureCodexMcp`. Merges
+ * into the existing JSON and never clobbers: an existing `forgerelay` entry is
+ * left untouched (`already`), and an unparseable file is reported as an error
+ * instead of being overwritten. Uses the actual bound MCP port so the entry
+ * matches this window's server.
+ */
+function configureClaudeMcp(mcpPort: number): ClaudeConfigResult {
+    const configPath = path.join(os.homedir(), '.claude', 'settings.json');
+    const entry = { type: 'sse', url: `http://127.0.0.1:${mcpPort}/sse` };
+    try {
+        const dir = path.dirname(configPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        if (!fs.existsSync(configPath)) {
+            fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { forgerelay: entry } }, null, 2) + '\n', 'utf8');
+            return { status: 'created', path: configPath };
+        }
+        const raw = fs.readFileSync(configPath, 'utf8');
+        let parsed: Record<string, unknown>;
+        try {
+            parsed = raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {};
+        } catch (err) {
+            return {
+                status: 'error', path: configPath,
+                detail: `existing file is not valid JSON (${err instanceof Error ? err.message : String(err)}) — fix or rename it first; refusing to overwrite`,
+            };
+        }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            return { status: 'error', path: configPath, detail: 'existing file is not a JSON object — refusing to overwrite' };
+        }
+        const servers = (parsed.mcpServers ?? {}) as Record<string, unknown>;
+        if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
+            return { status: 'error', path: configPath, detail: '"mcpServers" is not an object — refusing to overwrite' };
+        }
+        if (servers.forgerelay !== undefined) {
+            return { status: 'already', path: configPath };
+        }
+        servers.forgerelay = entry;
+        parsed.mcpServers = servers;
+        fs.writeFileSync(configPath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+        return { status: 'updated', path: configPath };
+    } catch (err) {
+        return { status: 'error', path: configPath, detail: err instanceof Error ? err.message : String(err) };
+    }
 }
 
 function getClaudeConfigPaths(repoRoot: string): { user: string; workspace: string; workspaceLocal: string } {

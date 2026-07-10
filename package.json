@@ -2,7 +2,7 @@
   "name": "forge-relay",
   "displayName": "Forge Relay",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.3.26",
+  "version": "0.4.0",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "preview": true,
@@ -81,6 +81,14 @@
       {
         "command": "forgeRelay.configureCodex",
         "title": "Forge Relay: Configure Codex"
+      },
+      {
+        "command": "forgeRelay.configureClaude",
+        "title": "Forge Relay: Configure Claude"
+      },
+      {
+        "command": "forgeRelay.getStarted",
+        "title": "Forge Relay: Get Started (configure agents + verify)"
       },
       {
         "command": "forgeRelay.toggleClanker",
@@ -188,6 +196,16 @@
           "type": "boolean",
           "default": false,
           "description": "Opt-in: when a dispatch routes to the ollama backend and the daemon is down, start 'ollama serve' once and re-probe (bounded). Off by default - explicit over hidden. Forge's control server is never auto-started from Relay (it runs in the VS Code extension host)."
+        },
+        "forgeRelay.codexExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Codex CLI executable for the 'codex' worker backend of dispatch_subagent (default: 'codex' on PATH). Dispatch with model \"codex\" or \"codex:<model>\" to run a task via codex exec, sandboxed by board autonomy (draft = read-only, clanker = workspace-write)."
+        },
+        "forgeRelay.codexWorkerTimeoutMs": {
+          "type": "number",
+          "default": 900000,
+          "description": "Wall-clock cap (ms) for one codex exec worker run dispatched via dispatch_subagent; the process is killed past it. Default 15 minutes."
         },
         "forgeRelay.ollamaExecutable": {
           "type": "string",

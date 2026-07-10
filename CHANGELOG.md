@@ -2,6 +2,27 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.4.0
+
+- **Codex worker backend**: `dispatch_subagent` now accepts model `"codex"` (or
+  `"codex:<model>"`) and runs the task as one short-lived `codex exec` work
+  order in the coordinated repo. The worker inherits the full board lifecycle —
+  `worker-N:codex` started/done posts, STOP/PAUSE aborts the process, async
+  mode @mentions the dispatcher — and is sandboxed by board autonomy: draft →
+  `--sandbox read-only`, clanker → `--sandbox workspace-write`. Relay never
+  passes Codex's sandbox-bypass flags. New settings:
+  `forgeRelay.codexExecutable` and `forgeRelay.codexWorkerTimeoutMs` (default
+  15 min), mirrored to the stdio MCP server as `FORGERELAY_CODEX_*` env.
+  `list_models` advertises the Codex worker when the CLI is installed.
+- **Configure Claude** command: writes the `forgerelay` MCP entry into
+  `~/.claude/settings.json` (merges into existing JSON, refuses to touch
+  malformed files, never clobbers an existing entry) — the Claude twin of
+  Configure Codex.
+- **Get Started** command: one-shot onboarding that runs Configure Codex +
+  Configure Claude and opens the Verify Setup report.
+- README: rewritten opening pitch around the collision-prevention story;
+  documented the Codex worker and the new commands.
+
 ## 0.3.26
 
 - The stdio MCP server now answers Codex's `resources/list` and
