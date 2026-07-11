@@ -41,7 +41,7 @@ let shouldAutoScroll = true;
 /** @type {{ status: string, detail: string }} */
 let claudeRuntime = { status: 'inactive', detail: 'Not connected.' };
 /** @type {'A'|'B'} */
-let currentClaudeMode = 'A';
+let currentClaudeMode = 'B';
 /** @type {{ claude: any, codex: any }} */
 let lastPresence = { claude: null, codex: null };
 /** @type {{ claude: boolean, codex: boolean } | null} */
@@ -181,7 +181,7 @@ function renderAgentCard(agent, presence, session) {
     } else if (agent === 'claude' && currentClaudeMode === 'B') {
         detailText += ` · Managed bridge: ${claudeRuntime.status}`;
     } else if (agent === 'claude' && currentRoster?.claude) {
-        detailText += ' · Mode A (/loop)';
+        detailText += ' · Interactive (/loop in your chat)';
     }
     detail.textContent = detailText;
 }
@@ -304,7 +304,7 @@ function updateModalVisibility() {
 
 function selectedClaudeMode() {
     const checked = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name="claude-mode"]:checked'));
-    return checked?.value === 'B' ? 'B' : 'A';
+    return checked?.value === 'A' ? 'A' : 'B';
 }
 
 /** @param {'draft'|'clanker'} mode */

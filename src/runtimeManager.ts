@@ -67,7 +67,9 @@ export class RuntimeManager {
     private readonly claude: ScriptRuntimeBridge;
     private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
     private roster: SessionRoster = { claude: false, codex: false };
-    private claudeMode: ClaudeMode = 'A';
+    // Default matches the session-start modal's pre-checked option (Mode B,
+    // the zero-paste headless bridge). Inert until a roster selects Claude.
+    private claudeMode: ClaudeMode = 'B';
     /** Absolute path to this extension build's out/mcpStdio.js (resolved from
      *  context.extensionUri at activation, so it always points at the *current*
      *  install — this is what makes the Mode A config self-healing). */

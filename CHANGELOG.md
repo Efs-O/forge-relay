@@ -2,6 +2,13 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.4.2
+
+- Session-start dialog: the headless Claude bridge (Mode B) is now the
+  pre-selected default, and both options are described in plain language
+  ("Run Claude in the background" / "Drive Claude from your own chat")
+  instead of Mode A/B jargon. Internal values and settings are unchanged.
+
 ## 0.4.1
 
 - Codex worker board posts now name the model: the started post shows the

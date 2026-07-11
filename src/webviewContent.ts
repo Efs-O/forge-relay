@@ -198,8 +198,8 @@ export function getWebviewHtml(
 
             <div class="mode-block" id="claude-mode-block">
                 <h3>Claude mode</h3>
-                <label class="check-row"><input type="radio" name="claude-mode" value="A" checked> Mode A — paste <code>/loop</code> into your open Claude chat</label>
-                <label class="check-row"><input type="radio" name="claude-mode" value="B"> Mode B — headless bridge (zero paste, uses your Claude Code login)</label>
+                <label class="check-row"><input type="radio" name="claude-mode" value="B" checked> Run Claude in the background — zero paste, uses your Claude Code login (recommended)</label>
+                <label class="check-row"><input type="radio" name="claude-mode" value="A"> Drive Claude from your own chat — paste <code>/loop</code>, you approve every action</label>
             </div>
 
             <div class="prompt-block" id="claude-prompt-block">
