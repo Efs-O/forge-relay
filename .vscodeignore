@@ -18,6 +18,7 @@ tsconfig.json
 **/*.md
 !README.md
 !CHANGELOG.md
+!resources/AGENTS.template.md
 .coordination/**
 .claude/**
 .claude.disabled/**

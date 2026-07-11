@@ -247,6 +247,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             vscode.window.showInformationMessage(
                 `Forge Relay Get Started — ${summarize('Codex', codex)}; ${summarize('Claude', claude)}. Opening the verification report…`);
             await vscode.commands.executeCommand('forgeRelay.verifySetup');
+
+            // Offer the shared agent protocol file. It tells agents that board
+            // usage is opt-in ("start using the board"), so agents stay quiet —
+            // and cheap — on solo work. Never overwrite an existing AGENTS.md.
+            const agentsTarget = path.join(repoRoot, 'AGENTS.md');
+            if (!fs.existsSync(agentsTarget)) {
+                const choice = await vscode.window.showInformationMessage(
+                    'Forge Relay: Create an AGENTS.md in this workspace? It teaches agents the board protocol (opt-in: agents only use the board when you say "start using the board").',
+                    'Create AGENTS.md', 'Skip');
+                if (choice === 'Create AGENTS.md') {
+                    try {
+                        const template = path.join(context.extensionUri.fsPath, 'resources', 'AGENTS.template.md');
+                        fs.copyFileSync(template, agentsTarget);
+                        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(agentsTarget));
+                        await vscode.window.showTextDocument(doc);
+                    } catch (err) {
+                        vscode.window.showErrorMessage(`Forge Relay: could not create AGENTS.md: ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                }
+            }
         }),
 
         runtimeStatusBar,

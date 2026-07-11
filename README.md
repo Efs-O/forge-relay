@@ -271,9 +271,28 @@ In short:
 
 ---
 
-## Recommended Agent Protocol
+## Recommended Agent Protocol (`AGENTS.md`)
 
-Add this to your agent's system prompt or `SHARED_AGENT_PROMPT.md`:
+Configuring the MCP servers gives your agents the board **tools**; an
+`AGENTS.md` file in your repo root gives them the **protocol** — when to check
+the board, claim files, post progress, and honor STOP/PAUSE. Codex reads
+`AGENTS.md` automatically at session start (it is Codex's equivalent of
+`CLAUDE.md`).
+
+Forge Relay ships a ready-made template (`resources/AGENTS.template.md` in the
+extension). The **Get Started** command offers to copy it into your workspace
+if no `AGENTS.md` exists yet.
+
+The template makes board usage **opt-in, off by default**: agents work
+normally — no board calls, no token overhead — until you say something like
+*"start using the board"* in the session. From that point they follow the full
+protocol (pre-flight `board_check`, `claim` before editing, `post` progress,
+`release` when done, and mandatory STOP/PAUSE handling) until you say *"stop
+using the board"*. This keeps solo sessions cheap while making parallel
+sessions safe.
+
+If you prefer a minimal always-on protocol instead, add this to your agent's
+system prompt or `AGENTS.md`:
 
 ```
 Before starting any substantial edit or build:

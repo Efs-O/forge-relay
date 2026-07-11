@@ -1,4 +1,4 @@
-# Shared Agent Prompt
+# Shared Agent Prompt — Forge Relay coordination
 
 Read this before continuing work in this repository.
 
@@ -17,33 +17,27 @@ Board mode activates only when the operator explicitly says so, e.g.:
 
 It stays active for the rest of the session (or until the operator says
 "stop using the board"). When active, follow the full protocol below. When
-inactive, skip everything below except the **Coordination-dir safety
-invariant**, which always applies to code changes.
+inactive, ignore everything below.
 
 ## Mission (board mode only)
 
-When board mode is active, you are one of two coding agents (`claude`, `codex`)
-working in parallel on this repository. Coordinate through the **Forge Relay
-board** — do not collide on files or tasks.
+When board mode is active, you are one of several coding agents (e.g. `claude`,
+`codex`) working in parallel on this repository. Coordinate through the
+**Forge Relay board** — do not collide on files or tasks.
 
-**Replace `<agent-name>` with your assigned identity (`codex` or `claude`) in every
-tool call below.**
+**Replace `<agent-name>` with your assigned identity (e.g. `codex` or `claude`)
+in every tool call below.**
 
 ## Repo Boundary
 
-Work only inside:
-
-- `N:\vs code apps\forge-relay\`
+Work only inside this repository's root folder.
 
 ## Coordination Channel — use the Forge Relay MCP tools
 
 Coordinate **exclusively through the Forge Relay MCP tools**. They come from the
 `forgerelay` MCP server configured in your own session (Claude: `.mcp.json` /
-settings; Codex: `~/.codex/config.toml` — Forge Relay never spawns a Codex
-process). Do **not** run the
-PowerShell scripts in `scripts/` for coordination — they are a legacy human
-debugging CLI only (see "Debugging fallback" at the bottom). Both agents now speak
-to the board the same way, through these tools:
+settings; Codex: `~/.codex/config.toml`). Both agents speak to the board the
+same way, through these tools:
 
 | Tool | Use it to |
 |---|---|
@@ -70,7 +64,7 @@ Every tool takes an `agent` argument — always pass your assigned identity.
 ## Required Operating Rules (board mode only)
 
 1. Do not edit an unclaimed file or folder.
-2. Do not take work already claimed by the other agent.
+2. Do not take work already claimed by another agent.
 3. Run `board_check` before substantial edits, builds, or long tasks.
 4. Post progress and blockers back to the board with `post`.
 5. Release claims with `release` when your lane is complete.
@@ -80,8 +74,7 @@ Every tool takes an `agent` argument — always pass your assigned identity.
 ## Blocking-command Rule
 
 `board_check` returns `BLOCKED` when there is an open operator `STOP`/`PAUSE`
-targeting you (or `all`). This is the hard halt — the MCP equivalent of the old
-watcher's non-zero exit. When you see `BLOCKED`:
+targeting you (or `all`). This is a hard halt. When you see `BLOCKED`:
 
 1. `ack_command` the listed command id.
 2. Stop all work. Do not claim, edit, build, or dispatch.
@@ -96,7 +89,7 @@ claim   agent="<agent-name>" targets=["<repo-relative-path>"] note="<scope>"
 release agent="<agent-name>" targets=["<repo-relative-path>"]
 ```
 
-`claim` denies the request if the other agent already holds the path — read the
+`claim` denies the request if another agent already holds the path — read the
 board (`get_status`), then decide.
 
 ## Reporting Rule
@@ -111,7 +104,7 @@ post agent="<agent-name>" note="your message here"
 
 ## Sync Wait Rule
 
-When you need an explicit response from the other agent:
+When you need an explicit response from another agent:
 
 1. `post` the question or handoff on the board.
 2. Poll with `board_check` / `get_status` for up to 100 seconds for a reply.
@@ -125,37 +118,8 @@ If another agent holds a claim on a nearby area and your fix may overlap:
 2. `post` on the board.
 3. Ask whether they want to keep the fix or hand it off.
 
-## Debugging fallback (humans only — not the agent's path)
-
-The PowerShell scripts under `scripts/` (`agent-bridge.ps1`, `agent-watch.ps1`)
-write the same `.coordination/*.json` board files directly. They are retained as a
-**manual operator/debugging CLI only**. Agents must coordinate through the MCP
-tools above, not these scripts. If a human runs them, the exact verbs are:
-
-```powershell
-# recent events  -> -Action history   (NOT "recent")
-# active claims   -> -Action status    (NOT "claims")
-pwsh scripts/agent-bridge.ps1 -Action history -Agent <agent-name>
-pwsh scripts/agent-bridge.ps1 -Action status  -Agent <agent-name>
-```
-
-## Coordination-dir safety invariant
-
-The board lives at `<repoRoot>/.coordination`, where `repoRoot` is
-`forgeRelay.coordinationPath` or the first workspace folder (`src/extension.ts`).
-Neither board-creating path — the in-extension HTTP server (`extension.ts`) nor
-the standalone stdio MCP server (`mcpStdio.ts`, which falls back to
-`process.cwd()`) — may create `.coordination` inside a VS Code installation
-directory: the MCP server holds `mcpstdio.log` open, which blocks the portable
-auto-updater from deleting that folder ("Access is denied (os error 5)"). The
-shared `isVsCodeInstallDir()` helper in `vscodeInstallDir.ts` guards both
-(launcher + `resources/app/product.json`): the extension bails with a warning,
-the headless stdio server redirects to `fallbackCoordinationRoot()`. Do not
-weaken or remove that guard, and keep both call sites using the shared helper.
-
 ## Protocol scope
 
-The **coordination-dir safety invariant** above always applies. Everything else
-in this file is the operating protocol for parallel work and applies **only
-after the operator activates board mode** in the session. Until then, do not
-call board tools at all — this is deliberate, to save tokens on solo work.
+Everything in this file applies **only after the operator activates board mode**
+in the session. Until then, do not call board tools at all — this is deliberate,
+to save tokens on solo work.
