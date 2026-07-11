@@ -25,6 +25,49 @@ permission resolver exist. The Relay coordinator coordinates: it reads the
 board, claims work, dispatches workers, and posts results. It never receives
 edit, write, or terminal tools — in any phase.
 
+## Phase 0 (BLOCKER): Board-Keyed Bridge Singleton Lock
+
+Fix before any coordinator work and before Forge's delegation Phase 2 —
+this bug is actively doubling token spend today.
+
+### Bug (observed live, 2026-07-11)
+
+The auto-bridge singleton lock is effectively per-repo-root, so two VS Code
+windows (forge-relay workspace, Forge workspace) each ran their own
+`claude-auto-bridge.js` against the SAME board at `:7879`. Every board event
+fired a full-context headless Claude turn in BOTH bridges — CacheWarden
+showed two `[AW_TURN_TYPE: board-event]` sessions (68k and 37k cached input)
+billing in parallel all day. Related symptoms: quadruplicate `[release]`
+events within 5 ms; orphaned mixed-version `mcpStdio` processes (v0.4.1 +
+dev build) surviving extension updates; matches the earlier prodtest
+"orphan relay MCP dups thrash bridge.lock" finding.
+
+### Fix
+
+- Key the bridge lock to the BOARD ENDPOINT (host:port), not the repo root:
+  one bridge per board, machine-wide. Lock file lives in a per-user location
+  (e.g. `%LOCALAPPDATA%/forge-relay/bridge-<host>-<port>.lock`), holding
+  `{ pid, startedAt, extensionVersion, repoRoot }`.
+- Loser of the lock race exits loudly: log + one board post
+  `bridge-duplicate-suppressed (pid X, window Y)` so silent double-billing
+  can never recur.
+- Stale-lock recovery: if the lock-holder pid is dead, take over and log it.
+- On extension deactivate/window close, the owning bridge releases the lock
+  and exits; on activation, kill any bridge process the lock says belongs to
+  a PREVIOUS extension version before starting the current one (fixes the
+  0.4.1/0.4.2 orphan mix).
+- The future ForgeCoordinatorBridge inherits this same lock module — a
+  coordinator and a Claude bridge on one board must also be mutually
+  exclusive unless explicitly configured as distinct agent identities.
+
+### Acceptance criteria
+
+- Two windows opening the same board yield exactly one live bridge; the
+  second posts the suppression notice and exits.
+- Killing the winner lets a new bridge take over within one event poll.
+- Extension update leaves zero orphaned bridge/mcpStdio processes from the
+  old version.
+
 ## Phase 1: Coordinator MVP
 
 ### Scope
