@@ -169,6 +169,7 @@ export function getWebviewHtml(
                             <option value="all">All agents</option>
                             <option value="claude">claude</option>
                             <option value="codex">codex</option>
+                            <option value="forge-coordinator">forge-coordinator</option>
                         </select>
                     </div>
                     <div class="button-row">

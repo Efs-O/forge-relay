@@ -8,13 +8,13 @@ export const COORDINATOR_TOOL_NAMES = [
 ] as const;
 
 export const BOARD_TOOL_SCHEMAS = [
-    { name: 'board_check', description: 'Preflight board check for blocking commands and recent events.', inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] } },
-    { name: 'claim', description: 'Claim files before editing.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, targets: { type: 'array', items: { type: 'string' } }, note: { type: 'string' }, ttl_minutes: { type: 'number' } }, required: ['agent', 'targets', 'note'] } },
-    { name: 'release', description: 'Release claimed files.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, targets: { type: 'array', items: { type: 'string' } }, note: { type: 'string' } }, required: ['agent', 'targets'] } },
-    { name: 'post', description: 'Post a one-line board update.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'note'] } },
-    { name: 'get_status', description: 'List active claims and commands.', inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] } },
-    { name: 'ack_command', description: 'Acknowledge STOP or PAUSE.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
-    { name: 'resolve_command', description: 'Resolve a command.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
+    { name: 'board_check', description: 'Pre-flight check. Returns blocking status and any new board events since last call. Run this before any substantial edit, build, or long task.', inputSchema: { type: 'object', properties: { agent: { type: 'string', description: 'Your agent identity (claude, codex, etc.)' } }, required: ['agent'] } },
+    { name: 'claim', description: 'Claim one or more files or folders before editing them. Prevents collisions with other agents.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, targets: { type: 'array', items: { type: 'string' }, description: 'Repo-relative paths to claim' }, note: { type: 'string', description: 'Brief description of what you are doing' }, ttl_minutes: { type: 'number', description: 'How long to hold the claim (default 120)' } }, required: ['agent', 'targets', 'note'] } },
+    { name: 'release', description: 'Release a claim when you are done with those files or folders.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, targets: { type: 'array', items: { type: 'string' } }, note: { type: 'string' } }, required: ['agent', 'targets'] } },
+    { name: 'post', description: 'Post a progress update, blocker, or handoff note to the shared board.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, note: { type: 'string', description: 'Plain ASCII message, one line' } }, required: ['agent', 'note'] } },
+    { name: 'get_status', description: 'Get all active claims and open operator commands.', inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] } },
+    { name: 'ack_command', description: 'Acknowledge an operator command (e.g. STOP or PAUSE). Always ack before stopping work.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
+    { name: 'resolve_command', description: 'Mark an operator command as resolved once work is stopped or paused.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
     DISPATCH_SUBAGENT_TOOL,
     LIST_MODELS_TOOL,
 ];
@@ -26,12 +26,17 @@ export async function executeBoardTool(bridge: Bridge, backends: SubagentBackend
         case 'board_check': {
             const blocking = bridge.getBlockingCommands(str(args.agent));
             const state = bridge.getState();
-            if (blocking.length) return `BLOCKED\n\n${blocking.map(c => `[${c.id.slice(0, 8)}] ${c.text} (by ${c.created_by})`).join('\n')}`;
+            if (blocking.length) return `BLOCKED\n\nYou have ${blocking.length} blocking command(s). Acknowledge and stop work.\n\n${blocking.map(c => `[${c.id.slice(0, 8)}] ${c.text} (by ${c.created_by})`).join('\n')}`;
             return `CLEAR\n\nActive claims: ${state.claims.length}\nRecent events:\n${state.events.slice(-10).map(e => `${e.timestamp} [${e.type}] ${e.agent}: ${e.message}`).join('\n') || '(none)'}`;
         }
         case 'claim': bridge.claim(str(args.agent), arr(args.targets), Number(args.ttl_minutes ?? 120), str(args.note)); return `CLAIMED: ${arr(args.targets).join(', ')}`;
         case 'release': bridge.release(str(args.agent), arr(args.targets), str(args.note)); return `RELEASED: ${arr(args.targets).join(', ')}`;
-        case 'post': bridge.post(str(args.agent), str(args.note)); return 'POSTED';
+        case 'post': {
+            const note = str(args.note).trim();
+            if (!note) return 'ERROR: post note must not be empty';
+            bridge.post(str(args.agent), note);
+            return 'POSTED';
+        }
         case 'get_status': {
             const state = bridge.getState();
             const claims = state.claims.length ? state.claims.map(c => `  ${c.agent}: ${c.paths.join(', ')} (expires ${c.expires_at})`).join('\n') : 'No active claims.';
