@@ -118,11 +118,26 @@ export class Bridge {
         return id;
     }
 
+    /**
+     * Look up a command by exact id or unambiguous prefix — board_check and the
+     * webview display truncated ids, so agents legitimately quote them back.
+     */
+    private findCommand(commands: Command[], commandId: string): Command {
+        const id = commandId.trim();
+        const exact = commands.find(c => c.id === id);
+        if (exact) { return exact; }
+        if (id.length >= 6) {
+            const matches = commands.filter(c => c.id.startsWith(id));
+            if (matches.length === 1) { return matches[0]; }
+            if (matches.length > 1) { throw new Error(`Ambiguous command id prefix: ${id} (${matches.length} matches)`); }
+        }
+        throw new Error(`Unknown command id: ${id}`);
+    }
+
     ack(agent: string, commandId: string, note: string): void {
         this.withLock('ack', () => {
             const state = this.readCommands();
-            const cmd = state.commands.find(c => c.id === commandId);
-            if (!cmd) { throw new Error(`Unknown command id: ${commandId}`); }
+            const cmd = this.findCommand(state.commands, commandId);
             if (!cmd.acknowledgements.find(a => a.agent === agent)) {
                 cmd.acknowledgements.push({ agent, acknowledged_at: new Date().toISOString(), note });
             }
@@ -137,21 +152,20 @@ export class Bridge {
                 cmd.status = 'acknowledged';
             }
             this.writeCommands(state);
-            this.appendEvent({ type: 'ack', agent, paths: [], message: note, meta: { command_id: commandId } });
+            this.appendEvent({ type: 'ack', agent, paths: [], message: note, meta: { command_id: cmd.id } });
         });
     }
 
     resolve(agent: string, commandId: string, note: string): void {
         this.withLock('resolve', () => {
             const state = this.readCommands();
-            const cmd = state.commands.find(c => c.id === commandId);
-            if (!cmd) { throw new Error(`Unknown command id: ${commandId}`); }
+            const cmd = this.findCommand(state.commands, commandId);
             cmd.status = 'resolved';
             (cmd as Command & { resolved_at: string; resolved_by: string; resolution_note: string }).resolved_at = new Date().toISOString();
             (cmd as Command & { resolved_by: string }).resolved_by = agent;
             (cmd as Command & { resolution_note: string }).resolution_note = note;
             this.writeCommands(state);
-            this.appendEvent({ type: 'resolve', agent, paths: [], message: note, meta: { command_id: commandId } });
+            this.appendEvent({ type: 'resolve', agent, paths: [], message: note, meta: { command_id: cmd.id } });
         });
     }
 
@@ -379,34 +393,40 @@ export class Bridge {
         const deadline = Date.now() + LOCK_TIMEOUT_MS;
         const startedAt = Date.now();
         while (Date.now() < deadline) {
+            let fd: number;
             try {
-                const fd = fs.openSync(this.lockPath, 'wx');
-                const owner = {
-                    pid: process.pid,
-                    operation,
-                    acquired_at: new Date().toISOString(),
-                    repo_root: this.repoRoot,
-                };
-                try {
-                    fs.writeFileSync(fd, JSON.stringify(owner), 'utf8');
-                } catch {
-                    // Best-effort metadata only.
-                } finally {
-                    fs.closeSync(fd);
-                }
-                this.logLock(`acquire pid=${process.pid} op=${operation} wait_ms=${Date.now() - startedAt}`);
-                try { fn(); } finally {
-                    this.logLock(`release pid=${process.pid} op=${operation} hold_ms=${Date.now() - startedAt}`);
-                    try { fs.unlinkSync(this.lockPath); } catch { /* ignore */ }
-                }
-                return;
+                fd = fs.openSync(this.lockPath, 'wx');
             } catch {
+                // Lock held by someone else — retry until the deadline.
                 if (deadline - Date.now() <= LOCK_RETRY_MS) {
                     const owner = this.describeLockOwner();
                     this.logLock(`timeout pid=${process.pid} op=${operation} wait_ms=${Date.now() - startedAt} owner=${owner}`);
                 }
                 this.sleepSync(LOCK_RETRY_MS);
+                continue;
             }
+            const owner = {
+                pid: process.pid,
+                operation,
+                acquired_at: new Date().toISOString(),
+                repo_root: this.repoRoot,
+            };
+            try {
+                fs.writeFileSync(fd, JSON.stringify(owner), 'utf8');
+            } catch {
+                // Best-effort metadata only.
+            } finally {
+                fs.closeSync(fd);
+            }
+            this.logLock(`acquire pid=${process.pid} op=${operation} wait_ms=${Date.now() - startedAt}`);
+            // fn() errors must propagate to the caller, not restart the acquire
+            // loop — retrying a throwing fn used to burn the whole timeout and
+            // surface as a bogus "could not acquire lock".
+            try { fn(); } finally {
+                this.logLock(`release pid=${process.pid} op=${operation} hold_ms=${Date.now() - startedAt}`);
+                try { fs.unlinkSync(this.lockPath); } catch { /* ignore */ }
+            }
+            return;
         }
         throw new Error('Could not acquire coordination lock — timed out.');
     }

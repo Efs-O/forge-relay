@@ -2,6 +2,18 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.4.1
+
+- Codex worker board posts now name the model: the started post shows the
+  `codex:<model>` override or the `~/.codex/config.toml` default, and the done
+  post shows the model `codex exec` actually reported in its run header.
+- Coordination-lock fix: an error thrown inside a locked operation (e.g.
+  "Unknown command id") now propagates immediately instead of being retried
+  for 10 s and misreported as "Could not acquire coordination lock".
+- `resolve_command` / `ack_command` accept an unambiguous command-id prefix
+  (≥6 chars), matching the truncated ids that `board_check` and the board
+  webview display.
+
 ## 0.4.0
 
 - **Codex worker backend**: `dispatch_subagent` now accepts model `"codex"` (or
