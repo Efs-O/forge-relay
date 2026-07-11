@@ -8,7 +8,7 @@ import { BoardEvent } from './types';
 import { CompletionResponse, runToolCompletionRound } from './toolCompletionRound';
 const { shouldTrigger } = require('../scripts/bridgeEventFilter') as { shouldTrigger: (event: BoardEvent, agent: string, mode?: string) => boolean };
 
-export interface ForgeCoordinatorModel { name: string; profile?: string; profiles?: string[]; servable?: boolean; }
+export interface ForgeCoordinatorModel { name: string; profile?: string; profiles?: string[]; servable?: boolean; provider?: string; }
 export interface ForgeCoordinatorOptions {
     bridge: Bridge;
     backends: SubagentBackends;

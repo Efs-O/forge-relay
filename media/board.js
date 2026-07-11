@@ -106,7 +106,7 @@ window.addEventListener('message', (/** @type {MessageEvent} */ event) => {
     }
     if (msg.type === 'forgeModels') {
         forgeModel.innerHTML = msg.models.length
-            ? msg.models.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}${m.servable === false ? ' (provider)' : ''}</option>`).join('')
+            ? msg.models.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}${m.servable === false ? ` (${esc(m.provider || 'provider')})` : ''}</option>`).join('')
             : '<option value="">No Forge models available</option>';
         forgeModelError.textContent = msg.error || '';
     }
