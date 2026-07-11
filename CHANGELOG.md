@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Centralized board tool schemas and execution across MCP HTTP, MCP stdio, and the Forge coordinator.
+- Shared the worker/coordinator completion round; coordinator history now truncates tool results to 8,000 characters and reports empty token-limit completions as errors.
+- Fixed the coordinator tools payload for strict OpenAI-compatible providers: board tool schemas are now sent as `function.parameters` instead of the MCP `inputSchema` key, which Cerebras rejected with HTTP 400.
+- Sorted the coordinator model dropdown: `@main` profile entries first, alphabetical within each profile group.
+
 All notable changes to the Forge Relay extension.
 
 ## 0.5.0

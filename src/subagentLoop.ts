@@ -12,17 +12,7 @@ import {
     DEFAULT_CODEX_TIMEOUT_MS,
 } from './codexWorker';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
-
-interface OpenAiToolCall {
-    id?: string;
-    function?: { name?: string; arguments?: string };
-}
-
-interface OpenAiMessage {
-    role: string;
-    content?: string | null;
-    tool_calls?: OpenAiToolCall[];
-}
+import { CompletionResponse, runToolCompletionRound } from './toolCompletionRound';
 
 export interface WorkerLoopOptions {
     maxSteps?: number;
@@ -104,49 +94,31 @@ export async function runWorkerLoop(
         // Fix B: a single transient ECONNRESET (e.g. a still-warming backend in the
         // opening burst of a fan-out) is retried with short backoff instead of
         // killing the worker. HTTP errors and aborts still surface immediately.
-        const res = await withConnRetry(
-            () => chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal),
-            { signal: opts.signal, onRetry: opts.onRetry },
-        ) as { choices?: Array<{ message?: OpenAiMessage; finish_reason?: string | null }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
-
-        // Track context/token usage when the backend reports it (llama.cpp, Ollama
-        // and the bridge all include an OpenAI `usage` block).
-        const usage = res.usage;
-        if (usage) {
-            if (typeof usage.prompt_tokens === 'number') { promptTokens = usage.prompt_tokens; }
-            if (typeof usage.total_tokens === 'number') { totalTokens += usage.total_tokens; }
-            opts.onUsage?.(promptTokens, totalTokens);
-        }
-
-        const choice = res.choices?.[0];
-        const msg = choice?.message;
-        if (!msg) {
-            return { finalText: 'Worker returned no message.', steps: step + 1, toolCalls, promptTokens, totalTokens };
-        }
-
-        const calls = msg.tool_calls ?? [];
-        if (calls.length === 0) {
-            const text = (msg.content ?? '').trim();
-            // F1: a reasoning/length overflow produces empty content + no tool calls
-            // + finish_reason 'length'. Surface it as a worker ERROR rather than a
-            // COMPLETED with an empty body that looks like success.
-            if (!text && choice?.finish_reason === 'length') {
-                throw new Error('worker produced no output and hit the token limit (reasoning/length overflow — raise max_tokens or lower reasoning_effort)');
-            }
-            return { finalText: text || '(worker finished with no summary)', steps: step + 1, toolCalls, promptTokens, totalTokens };
-        }
-
-        // Echo the assistant tool-call message, then append each tool result.
-        messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: msg.tool_calls });
-        for (const call of calls) {
-            const name = call.function?.name ?? '';
-            let args: Record<string, unknown> = {};
-            try { args = JSON.parse(call.function?.arguments || '{}'); } catch { /* leave empty */ }
-
-            const toolResult = await executeWorkerTool(name, args, ctx);
-            toolCalls++;
-            opts.onToolCall?.(name, toolResult);
-            messages.push({ role: 'tool', tool_call_id: call.id ?? name, content: toolResult.result.slice(0, 8_000) });
+        const round = await runToolCompletionRound({
+            messages,
+            complete: () => withConnRetry(
+                () => chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal),
+                { signal: opts.signal, onRetry: opts.onRetry },
+            ) as Promise<CompletionResponse>,
+            executeTool: async (name, args) => {
+                const result = await executeWorkerTool(name, args, ctx);
+                opts.onToolCall?.(name, result);
+                return result.result;
+            },
+            onResponse: res => {
+                const usage = res.usage;
+                if (usage) {
+                    if (typeof usage.prompt_tokens === 'number') promptTokens = usage.prompt_tokens;
+                    if (typeof usage.total_tokens === 'number') totalTokens += usage.total_tokens;
+                    opts.onUsage?.(promptTokens, totalTokens);
+                }
+            },
+            missingMessageText: 'Worker returned no message.',
+            emptyLengthError: 'worker produced no output and hit the token limit (reasoning/length overflow — raise max_tokens or lower reasoning_effort)',
+        });
+        toolCalls += round.toolCalls;
+        if (round.finished) {
+            return { finalText: round.finalText || '(worker finished with no summary)', steps: step + 1, toolCalls, promptTokens, totalTokens };
         }
     }
 

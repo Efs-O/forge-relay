@@ -2,9 +2,10 @@ import * as fs from 'fs';
 import { Bridge } from './bridge';
 import { RuntimeLease } from './runtimeLease';
 import { RuntimeStatus } from './runtimeBridge';
-import { SubagentBackends, forgeEnsure, forgeRelease } from './subagent';
+import { SubagentBackends, ResolvedModel, chatCompletionRaw, forgeEnsure, forgeRelease } from './subagent';
 import { BOARD_TOOL_SCHEMAS, executeBoardTool } from './boardTools';
 import { BoardEvent } from './types';
+import { CompletionResponse, runToolCompletionRound } from './toolCompletionRound';
 const { shouldTrigger } = require('../scripts/bridgeEventFilter') as { shouldTrigger: (event: BoardEvent, agent: string, mode?: string) => boolean };
 
 export interface ForgeCoordinatorModel { name: string; profile?: string; profiles?: string[]; servable?: boolean; }
@@ -35,8 +36,11 @@ export class ForgeCoordinatorBridge {
     private idleRelease: NodeJS.Timeout | null = null;
     private held = false;
     private requiresHold = true;
+    private resolved: ResolvedModel | null = null;
     private abort: AbortController | null = null;
     private history: Message[] = [];
+    private stoppingForCommand = false;
+    private readonly acknowledgedCommands = new Set<string>();
     private readonly lease: RuntimeLease;
 
     constructor(private readonly opts: ForgeCoordinatorOptions) {
@@ -47,9 +51,12 @@ export class ForgeCoordinatorBridge {
         const res = await fetch(`${controlUrl.replace(/\/$/, '')}/models`, { signal: AbortSignal.timeout(5000) });
         if (!res.ok) throw new Error(`Forge /models HTTP ${res.status}`);
         const data = await res.json() as { models?: ForgeCoordinatorModel[] };
+        const profileRank = (profile?: string) => profile === 'main' ? 0 : profile === 'subcoordinator' ? 1 : 2;
         return (data.models ?? []).flatMap(model => model.profiles?.length
             ? model.profiles.map(profile => ({ ...model, name: `${model.name}@${profile}`, profile, profiles: undefined }))
-            : [model]);
+            : [model])
+            // Coordinator dropdown: @main entries first so the usual pick is near the top.
+            .sort((a, b) => profileRank(a.profile) - profileRank(b.profile) || a.name.localeCompare(b.name));
     }
 
     status(): RuntimeStatus { return this.running ? (this.processing ? 'linked' : 'waiting') : 'inactive'; }
@@ -77,13 +84,13 @@ export class ForgeCoordinatorBridge {
             throw err;
         }
         this.running = true;
+        this.acknowledgedCommands.clear();
         this.cursor = fs.existsSync(this.opts.eventsPath) ? fs.statSync(this.opts.eventsPath).size : 0;
         this.history = [{ role: 'system', content: this.systemPrompt() }];
+        this.lease.markBridgeStarted(process.pid);
         this.opts.onStatus?.('waiting', `Forge coordinator ${model} waiting for board events.`);
         this.poll = setInterval(() => void this.scan(), 500);
-        this.stopPoll = setInterval(() => {
-            if (this.processing && this.opts.bridge.getBlockingCommands(AGENT).length) this.abort?.abort();
-        }, 250);
+        this.stopPoll = setInterval(() => void this.stopForBlockingCommand(), 250);
     }
 
     async stop(): Promise<void> {
@@ -96,6 +103,7 @@ export class ForgeCoordinatorBridge {
         this.abort = null;
         if (this.requiresHold && this.held && this.model) await forgeRelease(this.opts.controlUrl, this.model);
         this.held = false;
+        this.resolved = null;
         this.lease.releaseIfOwned();
         this.opts.onStatus?.('inactive', 'Forge coordinator disconnected.');
     }
@@ -124,8 +132,13 @@ export class ForgeCoordinatorBridge {
             const blocking = this.opts.bridge.getBlockingCommands(AGENT);
             if (blocking.length) { this.abort.abort(); return; }
             if (this.requiresHold) {
-                await forgeEnsure(this.opts.controlUrl, this.model);
-                this.held = true;
+                if (!this.held) {
+                    const ensured = await forgeEnsure(this.opts.controlUrl, this.model);
+                    this.resolved = { backend: ensured.backend, model: ensured.model, baseUrl: ensured.baseUrl };
+                    this.held = true;
+                }
+            } else {
+                this.resolved = { backend: 'forge-chat', model: this.model, baseUrl: this.opts.controlUrl };
             }
             this.history.push({ role: 'user', content: `Board event burst:\n${events.map(e => JSON.stringify(e)).join('\n')}` });
             await this.runToolLoop();
@@ -134,10 +147,19 @@ export class ForgeCoordinatorBridge {
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             this.opts.onLog?.(`Forge coordinator failure: ${message}`);
+            if (this.requiresHold && this.held) {
+                await forgeRelease(this.opts.controlUrl, this.model);
+                this.held = false;
+                this.resolved = null;
+            }
             const blocking = this.opts.bridge.getBlockingCommands(AGENT);
             if (blocking.length) {
                 for (const command of blocking) {
-                    try { this.opts.bridge.ack(AGENT, command.id, 'Coordinator stopped in-flight work.'); } catch { /* already acknowledged */ }
+                    if (this.acknowledgedCommands.has(command.id)) continue;
+                    try {
+                        this.opts.bridge.ack(AGENT, command.id, 'Coordinator stopped in-flight work.');
+                        this.acknowledgedCommands.add(command.id);
+                    } catch { /* already resolved */ }
                 }
             } else if (this.running && attempt < 3) {
                 const delay = 1000 * 2 ** attempt;
@@ -154,27 +176,67 @@ export class ForgeCoordinatorBridge {
         }
     }
 
+    private async stopForBlockingCommand(): Promise<void> {
+        if (!this.processing || this.stoppingForCommand) return;
+        const blocking = this.opts.bridge.getBlockingCommands(AGENT);
+        if (!blocking.length) return;
+        this.stoppingForCommand = true;
+        try {
+            for (const command of blocking) {
+                if (this.acknowledgedCommands.has(command.id)) continue;
+                try {
+                    this.opts.bridge.ack(AGENT, command.id, 'Coordinator stopped in-flight work.');
+                    this.acknowledgedCommands.add(command.id);
+                } catch { /* already resolved */ }
+            }
+            this.abort?.abort();
+            if (this.requiresHold && this.held) {
+                this.held = false;
+                this.resolved = null;
+                await forgeRelease(this.opts.controlUrl, this.model);
+            }
+        } finally {
+            this.stoppingForCommand = false;
+        }
+    }
+
     private async runToolLoop(): Promise<void> {
+        let usedTools = false;
         for (let step = 0; step < 12; step++) {
             if (this.opts.bridge.getBlockingCommands(AGENT).length) { this.abort?.abort(); return; }
-            const response = await fetch(`${this.opts.controlUrl.replace(/\/$/, '')}/chat`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: this.abort?.signal,
-                body: JSON.stringify({ model: this.model, messages: this.history, tools: BOARD_TOOL_SCHEMAS.map(t => ({ type: 'function', function: t })), tool_choice: 'auto' }),
+            const round = await runToolCompletionRound({
+                messages: this.history,
+                complete: () => {
+                    if (!this.resolved) throw new Error('Forge coordinator has no resolved model endpoint');
+                    return chatCompletionRaw(this.resolved, {
+                        messages: this.history,
+                        // OpenAI-compatible providers require `function.parameters`; the MCP-shaped
+                        // `inputSchema` key is rejected outright by strict ones (e.g. Cerebras HTTP 400).
+                        tools: BOARD_TOOL_SCHEMAS.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
+                        tool_choice: 'auto',
+                    }, this.abort?.signal) as Promise<CompletionResponse>;
+                },
+                beforeTool: () => {
+                    if (this.opts.bridge.getBlockingCommands(AGENT).length) {
+                        this.abort?.abort();
+                        throw new DOMException('Coordinator stopped before tool execution.', 'AbortError');
+                    }
+                },
+                executeTool: async (name, args) => {
+                    args.agent = AGENT;
+                    return executeBoardTool(this.opts.bridge, this.opts.backends, name, args)
+                        .catch(err => `ERROR: ${err instanceof Error ? err.message : String(err)}`);
+                },
+                missingMessageError: 'Forge /chat returned no assistant message',
+                emptyLengthError: 'coordinator produced no output and hit the token limit (reasoning/length overflow)',
+                maxToolResultChars: 8_000,
             });
-            if (!response.ok) throw new Error(`Forge /chat HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
-            const data = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> } }> };
-            const msg = data.choices?.[0]?.message;
-            if (!msg) throw new Error('Forge /chat returned no assistant message');
-            this.history.push({ role: 'assistant', content: msg.content ?? null, tool_calls: msg.tool_calls });
-            if (!msg.tool_calls?.length) return;
-            for (const call of msg.tool_calls) {
-                if (this.opts.bridge.getBlockingCommands(AGENT).length) { this.abort?.abort(); return; }
-                const name = call.function?.name ?? '';
-                let args: Record<string, unknown> = {};
-                try { args = JSON.parse(call.function?.arguments ?? '{}'); } catch { /* handler returns useful error */ }
-                args.agent = AGENT;
-                const result = await executeBoardTool(this.opts.bridge, this.opts.backends, name, args).catch(err => `ERROR: ${err instanceof Error ? err.message : String(err)}`);
-                this.history.push({ role: 'tool', tool_call_id: call.id ?? name, content: result });
+            usedTools ||= round.toolCalls > 0;
+            if (round.finished) {
+                if (!usedTools && round.finalText) {
+                    this.opts.bridge.post(AGENT, round.finalText.replace(/\s+/g, ' ').slice(0, 1000));
+                }
+                return;
             }
         }
         throw new Error('Coordinator exceeded 12 tool rounds for one event burst');

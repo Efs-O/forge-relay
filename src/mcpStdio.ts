@@ -6,8 +6,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Bridge } from './bridge';
 import { EventTail } from './eventTail';
-import { DEFAULT_SUBAGENT_BACKENDS, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels, SubagentBackends } from './subagent';
-import { handleDispatchSubagent } from './subagentLoop';
+import { DEFAULT_SUBAGENT_BACKENDS, SubagentBackends } from './subagent';
+import { BOARD_TOOL_SCHEMAS, executeBoardTool } from './boardTools';
 import { isVsCodeInstallDir, fallbackCoordinationRoot } from './vscodeInstallDir';
 
 // repoRoot resolution order: FORGERELAY_REPO_ROOT env wins, then --repoRoot, then
@@ -84,70 +84,7 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-        {
-            name: 'board_check',
-            description: 'Pre-flight check. Returns blocking status and any new board events since last call. Run this before any substantial edit, build, or long task.',
-            inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
-        },
-        {
-            name: 'claim',
-            description: 'Claim one or more files or folders before editing them.',
-            inputSchema: {
-                type: 'object',
-                properties: {
-                    agent: { type: 'string' },
-                    targets: { type: 'array', items: { type: 'string' } },
-                    note: { type: 'string' },
-                    ttl_minutes: { type: 'number' },
-                },
-                required: ['agent', 'targets', 'note'],
-            },
-        },
-        {
-            name: 'release',
-            description: 'Release a claim when done with those files or folders.',
-            inputSchema: {
-                type: 'object',
-                properties: { agent: { type: 'string' }, targets: { type: 'array', items: { type: 'string' } }, note: { type: 'string' } },
-                required: ['agent', 'targets'],
-            },
-        },
-        {
-            name: 'post',
-            description: 'Post a progress update, blocker, or handoff note to the shared board.',
-            inputSchema: {
-                type: 'object',
-                properties: { agent: { type: 'string' }, note: { type: 'string' } },
-                required: ['agent', 'note'],
-            },
-        },
-        {
-            name: 'get_status',
-            description: 'Get all active claims and recent board events.',
-            inputSchema: { type: 'object', properties: { agent: { type: 'string' } }, required: ['agent'] },
-        },
-        {
-            name: 'ack_command',
-            description: 'Acknowledge an operator command (STOP or PAUSE).',
-            inputSchema: {
-                type: 'object',
-                properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } },
-                required: ['agent', 'command_id'],
-            },
-        },
-        {
-            name: 'resolve_command',
-            description: 'Mark an operator command as resolved.',
-            inputSchema: {
-                type: 'object',
-                properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } },
-                required: ['agent', 'command_id'],
-            },
-        },
-        DISPATCH_SUBAGENT_TOOL,
-        LIST_MODELS_TOOL,
-    ],
+    tools: BOARD_TOOL_SCHEMAS,
 }));
 
 // Codex's MCP client probes resources/list and resources/templates/list at
@@ -164,61 +101,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToo
     logToolCall(request.params.name, str(args.agent));
 
     try {
-        switch (request.params.name) {
-            case 'board_check': {
-                const agent = str(args.agent);
-                const blocking = bridge.getBlockingCommands(agent);
-                const state = bridge.getState();
-                if (blocking.length > 0) {
-                    const summary = blocking.map(c => `[${c.id.slice(0, 8)}] ${c.text} (by ${c.created_by})`).join('\n');
-                    return text(`BLOCKED\n\nYou have ${blocking.length} blocking command(s). Acknowledge and stop work.\n\n${summary}`);
-                }
-                const recent = state.events.slice(-10).map(e =>
-                    `${e.timestamp} [${e.type}] ${e.agent}: ${e.message}`
-                ).join('\n');
-                return text(`CLEAR\n\nActive claims: ${state.claims.length}\nRecent events:\n${recent || '(none)'}`);
-            }
-            case 'claim': {
-                bridge.claim(str(args.agent), strArr(args.targets), num(args.ttl_minutes ?? 120), str(args.note ?? ''));
-                return text(`CLAIMED: ${strArr(args.targets).join(', ')}`);
-            }
-            case 'release': {
-                bridge.release(str(args.agent), strArr(args.targets), str(args.note ?? ''));
-                return text(`RELEASED: ${strArr(args.targets).join(', ')}`);
-            }
-            case 'post': {
-                bridge.post(str(args.agent), str(args.note));
-                return text('POSTED');
-            }
-            case 'get_status': {
-                const state = bridge.getState();
-                const claimSummary = state.claims.length === 0
-                    ? 'No active claims.'
-                    : state.claims.map(c => `  ${c.agent}: ${c.paths.join(', ')} (expires ${c.expires_at})`).join('\n');
-                const cmdSummary = state.commands.filter(c => c.status !== 'resolved').length === 0
-                    ? 'No open commands.'
-                    : state.commands.filter(c => c.status !== 'resolved')
-                        .map(c => `  [${c.id.slice(0, 8)}] ${c.text} -> ${c.target_agent} (${c.status})`).join('\n');
-                return text(`CLAIMS:\n${claimSummary}\n\nCOMMANDS:\n${cmdSummary}`);
-            }
-            case 'ack_command': {
-                bridge.ack(str(args.agent), str(args.command_id), str(args.note ?? ''));
-                return text(`ACKNOWLEDGED ${str(args.command_id)}`);
-            }
-            case 'resolve_command': {
-                bridge.resolve(str(args.agent), str(args.command_id), str(args.note ?? ''));
-                return text(`RESOLVED ${str(args.command_id)}`);
-            }
-            case 'dispatch_subagent': {
-                const result = await handleDispatchSubagent(bridge, subagentBackends, args);
-                return text(result);
-            }
-            case 'list_models': {
-                return text(await handleListModels(subagentBackends));
-            }
-            default:
-                return text(`Unknown tool: ${request.params.name}`);
-        }
+        return text(await executeBoardTool(bridge, subagentBackends, request.params.name, args));
     } catch (err) {
         return text(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -253,12 +136,6 @@ main().catch(err => {
 });
 
 function str(v: unknown): string { return String(v ?? ''); }
-function num(v: unknown): number { return Number(v ?? 0); }
-function strArr(v: unknown): string[] {
-    if (Array.isArray(v)) { return v.map(String); }
-    if (typeof v === 'string') { return [v]; }
-    return [];
-}
 function text(content: string): CallToolResult {
     return { content: [{ type: 'text', text: content }] };
 }
