@@ -1,5 +1,4 @@
 import { spawn, spawnSync, ChildProcess } from 'child_process';
-import * as path from 'path';
 import { RuntimeLease, RuntimeLeaseStatus } from './runtimeLease';
 
 /**
@@ -29,18 +28,21 @@ export interface RuntimeBridgeOptions {
     scriptPath: string;
     repoRoot: string;
     eventsPath: string;
+    boardEndpoint: string;
+    extensionVersion: string;
     extraArgs?: string[];
     linkedPattern?: RegExp;
     nodePath?: string;
     onStatus?: (status: RuntimeStatus, detail: string) => void;
     onLog?: (line: string) => void;
+    onDuplicateSuppressed?: (ownerPid: number, ownerRepoRoot: string) => void;
 }
 
 const RESTART_BASE_MS = 1_000;
 const RESTART_MAX_MS = 15_000;
 const MAX_RESTARTS = 6;
-const LEASE_HEARTBEAT_MS = 5_000;
-const FOLLOWER_RETRY_MS = 10_000;
+const LEASE_HEARTBEAT_MS = 1_000;
+const FOLLOWER_RETRY_MS = 1_000;
 
 export class ScriptRuntimeBridge implements AgentRuntimeBridge {
     readonly agent: string;
@@ -57,10 +59,17 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
     private leaseHeartbeatTimer: NodeJS.Timeout | null = null;
     private leaseRetryTimer: NodeJS.Timeout | null = null;
     private stopping = false;
+    private duplicateReported = false;
 
     constructor(private readonly opts: RuntimeBridgeOptions) {
         this.agent = opts.agent;
-        this.lease = new RuntimeLease(path.dirname(opts.eventsPath), opts.agent, opts.repoRoot, process.pid);
+        this.lease = new RuntimeLease(
+            opts.boardEndpoint,
+            opts.agent,
+            opts.repoRoot,
+            process.pid,
+            opts.extensionVersion,
+        );
     }
 
     status(): RuntimeStatus {
@@ -123,11 +132,26 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
         const result = this.lease.tryAcquire();
         if (result === 'held-by-live-other') {
             this.ownsLease = false;
-            this.setStatus('follower', `${this.agent} bridge owned by another window.`);
+            const owner = this.lease.readCurrent();
+            const ownerPid = owner?.pid ?? 0;
+            const ownerWindow = owner?.repoRoot ?? 'unknown';
+            const message = `bridge-duplicate-suppressed (pid ${ownerPid}, window ${ownerWindow})`;
+            this.opts.onLog?.(message);
+            if (!this.duplicateReported) {
+                this.duplicateReported = true;
+                this.opts.onDuplicateSuppressed?.(ownerPid, ownerWindow);
+            }
+            this.setStatus('follower', `${this.agent} bridge owned by another window (pid ${ownerPid}).`);
             this.scheduleFollowerRetry();
             return;
         }
+        if (result === 'recovered-stale') {
+            this.opts.onLog?.(`recovered stale bridge lock for ${this.opts.boardEndpoint}`);
+        } else if (result === 'replaced-old-version') {
+            this.opts.onLog?.(`replaced previous-version bridge for ${this.opts.boardEndpoint}`);
+        }
         this.ownsLease = true;
+        this.duplicateReported = false;
         this.clearFollowerRetry();
         this.spawnChild();
     }
@@ -277,6 +301,17 @@ export class ScriptRuntimeBridge implements AgentRuntimeBridge {
             return;
         }
         this.leaseHeartbeatTimer = setInterval(() => {
+            if (!this.lease.isOwned()) {
+                this.opts.onLog?.(`bridge lease lost for ${this.opts.boardEndpoint}; stopping local bridge`);
+                this.ownsLease = false;
+                this.stopLeaseHeartbeat();
+                if (this.child) {
+                    this.killChild(this.child);
+                } else {
+                    this.tryBecomeOwner();
+                }
+                return;
+            }
             const status = this.currentLeaseStatus();
             if (!status) {
                 this.stopLeaseHeartbeat();
