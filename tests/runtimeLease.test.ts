@@ -33,6 +33,18 @@ test('dead lock holder is recovered', (t) => {
     assert.equal(second.readCurrent()?.pid, 302);
 });
 
+test('different coordinator identities in one extension host remain mutually exclusive', (t) => {
+    const lockDir = tempDir();
+    t.after(() => fs.rmSync(lockDir, { recursive: true, force: true }));
+    const alive = () => true;
+    const claude = new RuntimeLease('http://localhost:7879/sse', 'claude', '/repo', 777, '0.4.2', { lockDir, isPidAlive: alive });
+    const forge = new RuntimeLease('http://localhost:7879/sse', 'forge-coordinator', '/repo', 777, '0.4.2', { lockDir, isPidAlive: alive });
+    assert.equal(claude.tryAcquire(), 'acquired');
+    assert.equal(forge.tryAcquire(), 'held-by-live-other');
+    forge.releaseIfOwned();
+    assert.equal(claude.isOwned(), true);
+});
+
 test('new extension version kills old bridge tree and takes lock', (t) => {
     const lockDir = tempDir();
     t.after(() => fs.rmSync(lockDir, { recursive: true, force: true }));

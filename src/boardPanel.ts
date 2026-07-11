@@ -85,7 +85,7 @@ export class BoardPanel {
         } catch { /* bridge unavailable */ }
     }
 
-    private handleWebviewMessage(msg: WebviewMessage): void {
+    private async handleWebviewMessage(msg: WebviewMessage): Promise<void> {
         const config = vscode.workspace.getConfiguration('forgeRelay');
         const defaultTtl = config.get<number>('claimTtlMinutes', 120);
 
@@ -148,7 +148,7 @@ export class BoardPanel {
                     this.bridge.release(msg.agent, msg.targets, msg.note ?? '');
                     break;
                 case 'connectSession':
-                    this.runtime.setRoster(msg.roster, msg.claudeMode);
+                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel);
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
@@ -163,7 +163,7 @@ export class BoardPanel {
                     break;
                 case 'disconnectSession':
                     this.bridge.endSession(msg.agent);
-                    this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());
+                    await this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());
                     this.panel.webview.postMessage({
                         type: 'notice',
                         message: 'SESSION_END posted; runtime bridges stopped.',
@@ -184,6 +184,8 @@ export class BoardPanel {
                     this.panel.webview.postMessage({ type: 'runtimeStatus', runtime: this.runtime.getSnapshot() } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'autonomyState', mode: this.bridge.getAutonomyMode() } satisfies ExtensionMessage);
                     this.refreshFeed();
+                    try { this.panel.webview.postMessage({ type: 'forgeModels', models: await this.runtime.listForgeCoordinatorModels() } satisfies ExtensionMessage); }
+                    catch (err) { this.panel.webview.postMessage({ type: 'forgeModels', models: [], error: err instanceof Error ? err.message : String(err) } satisfies ExtensionMessage); }
                     break;
             }
         } catch (err) {

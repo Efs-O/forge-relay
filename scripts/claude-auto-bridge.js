@@ -15,6 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { teeToLogFile } = require('./bridgeLog');
+const { shouldTrigger } = require('./bridgeEventFilter');
 
 // Windows-safe CLI launcher. `claude` is a .cmd shim that Node cannot spawn
 // directly with shell:false. On win32 go through the shell; elsewhere keep the
@@ -100,27 +101,6 @@ function summarizeEvent(event) {
     return parts.join(' ').trim();
 }
 
-function shouldTrigger(event, agent, mode) {
-    if (!event || typeof event !== 'object') { return false; }
-    if (event.agent && String(event.agent).toLowerCase() === agent) { return false; }
-    if (event.type === 'post' && /SESSION_(START|END)/.test(event.message || '')) {
-        return false;
-    }
-
-    if (event.type === 'command') {
-        const target = String((event.meta && event.meta.target_agent) || event.target || '').toLowerCase();
-        return target === 'all' || target === agent;
-    }
-    if (event.type !== 'post') { return false; }
-    if (mode === 'all') { return true; }
-
-    const poster = String(event.agent || '').toLowerCase();
-    const isOrchestrator = poster === 'claude' || poster === 'codex';
-    const isWorker = poster.startsWith('worker:');
-    if (!isOrchestrator && !isWorker) { return true; }
-    const haystack = [event.message, event.note, event.text].filter(Boolean).join(' ').toLowerCase();
-    return haystack.includes(agent);
-}
 
 function buildUserMessage(event, agent) {
     const text = [

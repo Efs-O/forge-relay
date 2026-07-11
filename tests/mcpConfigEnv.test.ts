@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { RuntimeManager } from '../src/runtimeManager';
 import { subagentEnvFromBackends, SubagentBackends } from '../src/subagent';
+import { Bridge } from '../src/bridge';
 
 const BACKENDS: SubagentBackends = {
     bridgeUrl: '',
@@ -32,6 +33,8 @@ function makeManager(repoRoot: string, subagentEnv?: Record<string, string>): Ru
         claudeScriptPath: path.join(repoRoot, 'claude-auto-bridge.js'),
         mcpStdioPath: path.join(repoRoot, 'out', 'mcpStdio.js'),
         extensionVersion: 'test',
+        bridge: new Bridge(repoRoot),
+        subagentBackends: { ...BACKENDS, forgeControlUrl: undefined },
         mcpUrl: 'http://127.0.0.1:7878/sse',
         repoRoot,
         eventsPath: path.join(repoRoot, '.coordination', 'events.ndjson'),

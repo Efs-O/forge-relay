@@ -102,7 +102,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         } catch { /* bridge unavailable */ }
     }
 
-    private handleMessage(msg: WebviewMessage): void {
+    private async handleMessage(msg: WebviewMessage): Promise<void> {
         const config = vscode.workspace.getConfiguration('forgeRelay');
         const defaultTtl = config.get<number>('claimTtlMinutes', 120);
 
@@ -161,7 +161,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                 case 'connectSession': {
                     // P3: apply the chosen roster. Only selected agents participate
                     // in the session; Codex joins via its own MCP session.
-                    this.runtime.setRoster(msg.roster, msg.claudeMode);
+                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel);
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
@@ -177,7 +177,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                 }
                 case 'disconnectSession':
                     this.bridge.endSession(msg.agent);
-                    this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());
+                    await this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());
                     this.post({ type: 'notice', message: 'SESSION_END posted; runtime bridges stopped.' });
                     this.post({ type: 'sessionState', session: this.bridge.getSessionState() });
                     this.post({ type: 'runtimeStatus', runtime: this.runtime.getSnapshot() });
@@ -196,6 +196,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                     this.post({ type: 'runtimeStatus', runtime: this.runtime.getSnapshot() });
                     this.post({ type: 'autonomyState', mode: this.bridge.getAutonomyMode() });
                     this.refreshFeed();
+                    try { this.post({ type: 'forgeModels', models: await this.runtime.listForgeCoordinatorModels() }); }
+                    catch (err) { this.post({ type: 'forgeModels', models: [], error: err instanceof Error ? err.message : String(err) }); }
                     break;
             }
         } catch (err) {
