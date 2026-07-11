@@ -47,6 +47,8 @@ export interface CodexExecResult {
     /** Set when the run was killed: the abort reason or 'timeout'. */
     aborted?: string;
     error?: string;
+    /** The model codex reported in its run header, when present. */
+    model?: string;
 }
 
 /** True when a dispatch model id targets the Codex CLI backend. */
@@ -63,6 +65,30 @@ export function codexModelOverride(model: string): string | undefined {
 }
 
 export const DEFAULT_CODEX_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * The model a plain `codex` dispatch will run: the top-level `model = "..."`
+ * from ~/.codex/config.toml. Used only to label board posts — codex itself
+ * resolves its default; this never feeds back into the exec args.
+ */
+export function codexDefaultModel(configPath?: string): string | undefined {
+    const file = configPath ?? path.join(os.homedir(), '.codex', 'config.toml');
+    try {
+        for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('[')) { break; } // top-level keys end at the first table
+            const match = /^model\s*=\s*"([^"]+)"/.exec(trimmed);
+            if (match) { return match[1]; }
+        }
+    } catch { /* no config — codex will use its built-in default */ }
+    return undefined;
+}
+
+/** The `model: <name>` line codex exec prints in its run header. Exported for tests. */
+export function parseCodexModelHeader(stdout: string): string | undefined {
+    const match = /^\s*model:\s*(\S+)/m.exec(stdout);
+    return match?.[1];
+}
 
 /** Build the `codex exec` argv (without the executable). Exported for tests. */
 export function buildCodexArgs(opts: { model?: string; sandbox: string; lastMessagePath: string }): string[] {
@@ -194,8 +220,9 @@ export function runCodexExec(opts: CodexExecOptions): Promise<CodexExecResult> {
             let last = '';
             try { last = fs.readFileSync(lastMessagePath, 'utf8').trim(); } catch { /* fall back to stdout */ }
             const output = last || stdout.trim().slice(-4_000);
+            const model = parseCodexModelHeader(stdout);
             if (aborted) {
-                finish({ ok: false, output, exitCode: code, aborted });
+                finish({ ok: false, output, exitCode: code, aborted, model });
                 return;
             }
             if (code !== 0) {
@@ -204,10 +231,11 @@ export function runCodexExec(opts: CodexExecOptions): Promise<CodexExecResult> {
                     output,
                     exitCode: code,
                     error: `codex exec exited ${code}: ${(stderr || stdout).trim().slice(-500)}`,
+                    model,
                 });
                 return;
             }
-            finish({ ok: true, output: output || '(codex finished with no final message)', exitCode: code });
+            finish({ ok: true, output: output || '(codex finished with no final message)', exitCode: code, model });
         });
 
         child.stdin?.on('error', () => { /* the close handler reports the real failure */ });

@@ -8,7 +8,7 @@ import {
 import { forgeHolds, forgeSlots } from './forgeHold';
 import { ensureOllamaDaemon } from './daemonSupervisor';
 import {
-    isCodexModel, codexModelOverride, buildCodexPrompt, probeCodexCli, runCodexExec,
+    isCodexModel, codexModelOverride, codexDefaultModel, buildCodexPrompt, probeCodexCli, runCodexExec,
     DEFAULT_CODEX_TIMEOUT_MS,
 } from './codexWorker';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
@@ -232,7 +232,11 @@ export async function handleDispatchSubagent(
         const autonomy: WorkerAutonomy = bridge.getAutonomyMode();
         const sandbox = autonomy === 'clanker' ? 'workspace-write' as const : 'read-only' as const;
         const checkpoint = autonomy === 'clanker' ? gitCheckpoint(bridge.getRepoRoot()) : 'draft mode (read-only sandbox)';
-        bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (codex exec, sandbox ${sandbox}, ${probe.detail}): ${task} | ${checkpoint}`));
+        // Best-effort model label for the board: the explicit codex:<model>
+        // override, else the user's ~/.codex/config.toml default. The done post
+        // upgrades to the model codex actually reported in its run header.
+        const modelLabel = codexModelOverride(model) ?? codexDefaultModel() ?? 'default model';
+        bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (codex exec ${modelLabel}, sandbox ${sandbox}, ${probe.detail}): ${task} | ${checkpoint}`));
 
         const runCodex = async (mentionDispatcher: boolean): Promise<string> => {
             const wake = mentionDispatcher ? `${dispatcher}: ` : '';
@@ -257,8 +261,8 @@ export async function handleDispatchSubagent(
                     bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${res.error ?? 'codex exec failed'}`));
                     return `SUBAGENT ${subagentId} (${model}) ERROR: ${res.error ?? 'codex exec failed'}${res.output ? `\n\nPartial output:\n${res.output}` : ''}`;
                 }
-                bridge.post(worker, formatWorkerPost(`${wake}done [${subagentId.slice(0, 10)}]: ${res.output}`));
-                return `SUBAGENT ${subagentId} (${model}, ${autonomy}) COMPLETED:\n\n${res.output}\n\n[${checkpoint}]`;
+                bridge.post(worker, formatWorkerPost(`${wake}done [${subagentId.slice(0, 10)}] (${res.model ?? modelLabel}): ${res.output}`));
+                return `SUBAGENT ${subagentId} (${model} → ${res.model ?? modelLabel}, ${autonomy}) COMPLETED:\n\n${res.output}\n\n[${checkpoint}]`;
             } catch (err) {
                 const error = err instanceof Error ? err.message : String(err);
                 bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${error}`));
