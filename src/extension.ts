@@ -13,6 +13,7 @@ import { subagentEnvFromBackends } from './subagent';
 import { RuntimeStatus } from './runtimeBridge';
 import { BoardEvent, ClaudeMode, SessionRoster } from './types';
 import { isVsCodeInstallDir } from './vscodeInstallDir';
+import { resolveForgeControlUrl } from './forgeControlDiscovery';
 
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
@@ -56,13 +57,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const bridge = new Bridge(repoRoot);
     bridge.ensureAutonomyDefault(config.get<'draft' | 'clanker'>('defaultAutonomy', 'draft'));
+    const forgeControl = await resolveForgeControlUrl(config.get<string>('subagentForgeControlUrl', ''));
+    log(`[forge-control] ${forgeControl.detail}${forgeControl.url ? ` url=${forgeControl.url}` : ''}`);
     const subagentBackends = {
         bridgeUrl: config.get<string>('subagentBridgeUrl', '').trim(),
         ollamaUrl: config.get<string>('subagentOllamaUrl', 'http://127.0.0.1:11434/v1').trim(),
         directUrl: config.get<string>('subagentDirectUrl', 'http://127.0.0.1:8080/v1').trim(),
         bridgeApiKey: config.get<string>('subagentBridgeApiKey', '').trim() || undefined,
         defaultBackend: config.get<'bridge' | 'ollama' | 'direct'>('subagentDefaultBackend', 'ollama'),
-        forgeControlUrl: config.get<string>('subagentForgeControlUrl', '').trim() || undefined,
+        forgeControlUrl: forgeControl.url,
         defaultRunMode: config.get<'sync' | 'async'>('subagentDefaultMode', 'sync'),
         ollamaAutoStart: config.get<boolean>('ollamaAutoStart', false),
         ollamaExecutable: config.get<string>('ollamaExecutable', '').trim() || undefined,
