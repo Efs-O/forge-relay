@@ -31,6 +31,7 @@ function makeManager(repoRoot: string, subagentEnv?: Record<string, string>): Ru
     return new RuntimeManager({
         claudeScriptPath: path.join(repoRoot, 'claude-auto-bridge.js'),
         mcpStdioPath: path.join(repoRoot, 'out', 'mcpStdio.js'),
+        extensionVersion: 'test',
         mcpUrl: 'http://127.0.0.1:7878/sse',
         repoRoot,
         eventsPath: path.join(repoRoot, '.coordination', 'events.ndjson'),

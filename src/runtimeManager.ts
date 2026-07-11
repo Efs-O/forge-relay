@@ -21,6 +21,8 @@ export interface RuntimeManagerOptions {
     mcpStdioPath: string;
     /** SSE URL of the Forge Relay MCP server, attached to the headless Claude bridge. */
     mcpUrl: string;
+    /** Version of the supervising extension, used to reap old bridge builds. */
+    extensionVersion: string;
     repoRoot: string;
     eventsPath: string;
     nodePath?: string;
@@ -50,6 +52,7 @@ export interface RuntimeManagerOptions {
      */
     subagentEnv?: Record<string, string>;
     onLog?: (line: string) => void;
+    onDuplicateSuppressed?: (ownerPid: number, ownerRepoRoot: string) => void;
 }
 
 /**
@@ -104,10 +107,13 @@ export class RuntimeManager {
             scriptPath: opts.claudeScriptPath,
             repoRoot: opts.repoRoot,
             eventsPath: opts.eventsPath,
+            boardEndpoint: opts.mcpUrl,
+            extensionVersion: opts.extensionVersion,
             nodePath: opts.nodePath,
             extraArgs: claudeArgs,
             onStatus: () => this.emit(),
             onLog: opts.onLog,
+            onDuplicateSuppressed: opts.onDuplicateSuppressed,
         });
     }
 

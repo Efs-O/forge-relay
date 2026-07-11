@@ -96,6 +96,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         claudeScriptPath: path.join(context.extensionUri.fsPath, 'scripts', 'claude-auto-bridge.js'),
         mcpStdioPath: path.join(context.extensionUri.fsPath, 'out', 'mcpStdio.js'),
         mcpUrl: `http://127.0.0.1:${port}/sse`,
+        extensionVersion: String(context.extension.packageJSON.version || 'dev'),
         repoRoot,
         eventsPath,
         nodePath: config.get<string>('nodePath', '').trim() || undefined,
@@ -105,6 +106,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         claudeKeepAliveMaxPings: config.get<number>('claudeKeepAliveMaxPings', 3),
         subagentEnv: subagentEnvFromBackends(subagentBackends),
         onLog: (line) => { log(`[bridge] ${line}`); console.log('[forgerelay:bridge]', line); },
+        onDuplicateSuppressed: (ownerPid, ownerRepoRoot) => {
+            bridge.post('claude', `bridge-duplicate-suppressed (pid ${ownerPid}, window ${ownerRepoRoot})`);
+        },
     });
     const rm = runtimeManager;
 
