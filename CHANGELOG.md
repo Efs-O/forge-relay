@@ -2,6 +2,24 @@
 
 All notable changes to the Forge Relay extension.
 
+## 0.5.0
+
+- Added the Forge model coordinator MVP to the Connect dialog. A selected
+  Forge `model@profile` reacts to board events with persistent bounded history,
+  uses only board/dispatch tools, suppresses its own events, and never receives
+  file or terminal capabilities.
+- Added coordinator model lifecycle management: validate on connect, lazy
+  re-ensure for event bursts, five-minute idle release, release on disconnect
+  and shutdown, visible failures, bounded retry backoff, and STOP cancellation.
+- Added automatic Forge control discovery through the live per-user registry
+  `%LOCALAPPDATA%/forge-llm/control-server.json`. The explicit
+  `forgeRelay.subagentForgeControlUrl` setting remains available as an override.
+- Added a machine-wide, board-endpoint-keyed runtime lock shared by Claude and
+  Forge coordinators, including stale-owner recovery, old-version process-tree
+  cleanup, duplicate suppression notices, and shutdown release.
+- Extracted shared Claude/Forge board-event filtering and added coordinator,
+  control-discovery, and cross-runtime-lock regression tests.
+
 ## 0.4.2
 
 - Session-start dialog: the headless Claude bridge (Mode B) is now the

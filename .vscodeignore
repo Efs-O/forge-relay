@@ -8,6 +8,7 @@ smoke/**
 scripts/**
 !scripts/claude-auto-bridge.js
 !scripts/bridgeLog.js
+!scripts/bridgeEventFilter.js
 node_modules/**
 out/**/*.js.map
 **/*.ts

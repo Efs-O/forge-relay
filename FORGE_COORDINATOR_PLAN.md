@@ -1,5 +1,42 @@
 # Forge Coordinator Plan
 
+## Implementation Status (2026-07-11, Relay 0.5.0)
+
+### Completed and packaged
+
+- Phase 0 machine-wide bridge lock is implemented and committed (`3ffb511`).
+  Locks are keyed by board endpoint, shared across coordinator identities, and
+  cover duplicate suppression, stale takeover, version replacement, and
+  shutdown cleanup.
+- Phase 1 coordinator MVP is implemented and committed (`2b3d696`): Connect
+  model/profile selection, persistent bounded history, board-only tool use,
+  self-trigger suppression, STOP-aware cancellation, visible retry failures,
+  dispatch support, and ensure/release lifecycle.
+- Forge control discovery is implemented and committed (`e56abec`): explicit
+  setting override first, otherwise the per-user Forge registry with PID,
+  localhost URL, and `/healthz` validation. The live Forge 0.12.27 registry was
+  validated successfully.
+- Automated gates currently pass: TypeScript, production bundle, and 102 tests.
+
+### Validation still required
+
+- Install the 0.5.0 VSIX and run the four manual quality-gate smokes below:
+  end-to-end worker dispatch, STOP during completion, Forge restart recovery,
+  and Claude Mode B regression.
+- Run the coordinator on a real board for at least one week before evaluating
+  Phase 2. This evidence gate is intentionally not waived by packaging.
+
+### Review debt before declaring MVP complete
+
+- Confirm by review that the coordinator completion/tool round and MCP tool
+  handlers satisfy the anti-duplication requirements below; the current MVP
+  has shared event filtering and a shared coordinator tool executor, but this
+  review has not yet been signed off.
+- Expand automated coverage for streaming STOP, bounded-history rollover,
+  unreachable-Forge Connect UX, retry recovery, and coordinator-to-worker
+  board delivery. The existing tests cover discovery validation, shared-lock
+  exclusion, trigger suppression, and ensure/idle-release/re-ensure.
+
 ## Goal
 
 Let a Forge-served local model act as the Relay board coordinator — the role
