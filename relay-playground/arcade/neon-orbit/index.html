@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Neon Orbit</title>
+  <style>
+    *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#02030d;color:#dfffff;font-family:Arial,sans-serif}canvas{display:block;width:100%;height:100%;cursor:crosshair}.hud{position:fixed;top:22px;left:50%;transform:translateX(-50%);text-align:center;pointer-events:none;text-transform:uppercase;letter-spacing:.28em;text-shadow:0 0 12px #00f6ff}.label{font-size:11px;color:#61faff}.score{font:700 30px/1 monospace;margin-top:5px}.over{position:fixed;inset:0;display:none;place-items:center;background:rgba(1,2,12,.65);text-align:center}.over.show{display:grid}.panel{padding:42px 56px;border:1px solid #ff2bd6;box-shadow:0 0 35px #ff2bd666,inset 0 0 28px #00f6ff22;background:#040519dd}.panel h1{margin:0;color:#ff4dde;letter-spacing:.16em;text-shadow:0 0 18px #ff2bd6}.panel p{color:#8dfff1;letter-spacing:.12em}.panel button{border:1px solid #baff29;background:transparent;color:#baff29;padding:12px 24px;font-weight:bold;letter-spacing:.12em;cursor:pointer;box-shadow:0 0 12px #baff2966}.hint{position:fixed;bottom:20px;width:100%;text-align:center;color:#557b91;font-size:11px;letter-spacing:.15em;pointer-events:none}
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div class="hud"><div class="label">Orbit score</div><div class="score" id="score">0</div></div>
+  <div class="hint">CLICK / SPACE / UP TO DASH</div>
+  <div class="over" id="over"><div class="panel"><h1>ORBIT LOST</h1><p id="final">SCORE 0</p><button id="restart">CLICK TO RESTART</button></div></div>
+  <script>
+  (()=>{
+    'use strict';
+    const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+    const scoreEl=document.getElementById('score'),over=document.getElementById('over'),finalEl=document.getElementById('final'),restart=document.getElementById('restart');
+    const colors=['#00f6ff','#ff2bd6','#baff29'];
+    let w,h,cx,cy,dpr,last,playing,score,angle,radius,radialVelocity,obstacles,particles,spawnClock,stars;
+    function resize(){dpr=Math.min(devicePixelRatio||1,2);w=innerWidth;h=innerHeight;canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);cx=w/2;cy=h/2;makeStars()}
+    function makeStars(){stars=Array.from({length:Math.floor(w*h/14000)},()=>({x:Math.random()*w,y:Math.random()*h,a:.15+Math.random()*.5,s:Math.random()*1.5}))}
+    function reset(){playing=true;score=0;angle=-Math.PI/2;radius=Math.min(w,h)*.16;radialVelocity=0;obstacles=[];particles=[];spawnClock=0;last=performance.now();scoreEl.textContent='0';over.classList.remove('show')}
+    function jump(){if(playing)radialVelocity=Math.max(radialVelocity,Math.min(w,h)*.42)}
+    function burst(x,y,color,count=18){for(let i=0;i<count;i++){const a=Math.random()*Math.PI*2,s=40+Math.random()*150;particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,size:2+Math.random()*4,color})}}
+    function spawn(){const edge=Math.floor(Math.random()*4),pad=35;let x,y;if(edge===0){x=Math.random()*w;y=-pad}else if(edge===1){x=w+pad;y=Math.random()*h}else if(edge===2){x=Math.random()*w;y=h+pad}else{x=-pad;y=Math.random()*h}const a=Math.atan2(cy-y,cx-x),level=Math.floor(score/10),speed=(45+Math.random()*24)*Math.pow(1.1,level);obstacles.push({x,y,vx:Math.cos(a)*speed,vy:Math.sin(a)*speed,r:12+Math.random()*10,color:colors[Math.floor(Math.random()*colors.length)],pulse:score>=20&&Math.random()<.38,phase:Math.random()*6.28,line:Math.random()<.35,scored:false})}
+    function circleLine(px,py,pr,x1,y1,x2,y2){const dx=x2-x1,dy=y2-y1,l=dx*dx+dy*dy,t=l?Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/l)):0,qx=x1+t*dx,qy=y1+t*dy;return Math.hypot(px-qx,py-qy)<pr+5}
+    function gameOver(){if(!playing)return;playing=false;const p=playerPos();burst(p.x,p.y,'#ff2bd6',55);finalEl.textContent='SCORE '+score;setTimeout(()=>over.classList.add('show'),350)}
+    function playerPos(){return{x:cx+Math.cos(angle)*radius,y:cy+Math.sin(angle)*radius}}
+    function update(dt,t){if(playing){angle+=dt*(1.35+Math.min(score,.8)/100);const base=Math.min(w,h)*.16;radialVelocity+=(base-radius)*8.5*dt;radialVelocity*=Math.pow(.16,dt);radius+=radialVelocity*dt;radius=Math.max(base*.75,Math.min(radius,Math.min(w,h)*.43));spawnClock-=dt;const interval=Math.max(.48,1.75*Math.pow(.95,Math.floor(score/10)));if(spawnClock<=0){spawn();spawnClock=interval}const p=playerPos();for(const o of obstacles){let mult=o.pulse?1+Math.sin(t*.006+o.phase)*.3:1;o.x+=o.vx*dt*mult;o.y+=o.vy*dt*mult;const rr=o.r*(o.pulse?1+Math.sin(t*.008+o.phase)*.28:1);const hit=o.line?circleLine(p.x,p.y,9,o.x-o.vy/o.r,o.y+o.vx/o.r,o.x+o.vy/o.r,o.y-o.vx/o.r):Math.hypot(p.x-o.x,p.y-o.y)<9+rr;if(hit)gameOver();const centerDist=Math.hypot(o.x-cx,o.y-cy);if(!o.scored&&centerDist<base*.42){o.scored=true;score++;scoreEl.textContent=score;burst(o.x,o.y,o.color,12)}}obstacles=obstacles.filter(o=>Math.hypot(o.x-cx,o.y-cy)>8&&!o.scored)}for(const p of particles){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=.98;p.vy*=.98;p.life-=dt*1.45}particles=particles.filter(p=>p.life>0)}
+    function glow(color,blur){ctx.shadowColor=color;ctx.shadowBlur=blur;ctx.strokeStyle=color;ctx.fillStyle=color}
+    function draw(t){ctx.globalCompositeOperation='source-over';ctx.fillStyle='#02030d';ctx.fillRect(0,0,w,h);ctx.shadowBlur=0;for(const s of stars){ctx.fillStyle=`rgba(75,180,220,${s.a})`;ctx.fillRect(s.x,s.y,s.s,s.s)}const base=Math.min(w,h)*.16;ctx.save();ctx.translate(cx,cy);glow('#073d66',8);ctx.lineWidth=1;ctx.beginPath();ctx.arc(0,0,base,0,Math.PI*2);ctx.stroke();glow('#00f6ff',22);ctx.beginPath();ctx.arc(0,0,5+Math.sin(t*.004)*2,0,Math.PI*2);ctx.fill();ctx.restore();for(const o of obstacles){const rr=o.r*(o.pulse?1+Math.sin(t*.008+o.phase)*.28:1);glow(o.color,14);ctx.lineWidth=3;if(o.line){const nx=-o.vy/Math.hypot(o.vx,o.vy),ny=o.vx/Math.hypot(o.vx,o.vy);ctx.beginPath();ctx.moveTo(o.x+nx*rr*1.8,o.y+ny*rr*1.8);ctx.lineTo(o.x-nx*rr*1.8,o.y-ny*rr*1.8);ctx.stroke()}else{ctx.beginPath();for(let i=0;i<6;i++){const a=i*Math.PI/3+(t*.001);ctx.lineTo(o.x+Math.cos(a)*rr,o.y+Math.sin(a)*rr)}ctx.closePath();ctx.stroke()}}const p=playerPos();ctx.save();ctx.translate(p.x,p.y);ctx.rotate(angle+Math.PI/2);glow('#00f6ff',18);ctx.beginPath();ctx.moveTo(0,-12);ctx.lineTo(8,9);ctx.lineTo(0,5);ctx.lineTo(-8,9);ctx.closePath();ctx.fill();ctx.restore();ctx.globalCompositeOperation='lighter';for(const q of particles){ctx.globalAlpha=Math.max(0,q.life);glow(q.color,10);ctx.fillRect(q.x-q.size/2,q.y-q.size/2,q.size,q.size)}ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.shadowBlur=0}
+    function frame(t){const dt=Math.min((t-last)/1000,.033);last=t;update(dt,t);draw(t);requestAnimationFrame(frame)}
+    addEventListener('resize',resize);addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();jump()}});canvas.addEventListener('mousedown',e=>{if(e.button===0)jump()});restart.addEventListener('click',reset);over.addEventListener('click',e=>{if(e.target===over)reset()});
+    resize();reset();requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

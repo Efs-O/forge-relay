@@ -14,7 +14,7 @@ On top of the safety layer, orchestrators get a `dispatch_subagent` tool for del
 
 ![Forge Relay board with live event feed](media/screenshot-board.jpg)
 
-**Start an agent session** — pick which orchestrators participate (Claude Mode A/B, or Codex via its own MCP session):
+**Start an agent session** — pick which orchestrators participate (Claude in the background or driven from your own chat, or Codex via its own MCP session):
 
 ![Start Agent Session dialog](media/screenshot-session.jpg)
 
