@@ -16,7 +16,7 @@ test('listModels expands profiles and sorts main-profile entries first', async (
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ models: [
             { name: 'zeta', profiles: ['main', 'worker'], servable: true },
-            { name: 'alpha', profiles: ['worker', 'main', 'subcoordinator'], servable: false },
+            { name: 'alpha', profiles: ['worker', 'main', 'subcoordinator'], servable: false, provider: 'cerebras' },
             { name: 'bare-model', servable: true },
         ] }));
     });
@@ -24,8 +24,9 @@ test('listModels expands profiles and sorts main-profile entries first', async (
     t.after(() => server.close());
     const address = server.address();
     assert.ok(address && typeof address === 'object');
-    const names = (await ForgeCoordinatorBridge.listModels(`http://127.0.0.1:${address.port}`)).map(m => m.name);
-    assert.deepEqual(names, ['alpha@main', 'zeta@main', 'alpha@subcoordinator', 'alpha@worker', 'bare-model', 'zeta@worker']);
+    const models = await ForgeCoordinatorBridge.listModels(`http://127.0.0.1:${address.port}`);
+    assert.deepEqual(models.map(m => m.name), ['alpha@main', 'zeta@main', 'alpha@subcoordinator', 'alpha@worker', 'bare-model', 'zeta@worker']);
+    assert.equal(models.find(m => m.name === 'alpha@main')?.provider, 'cerebras', 'provider display name must pass through for the dropdown');
 });
 
 test('coordinator validates, re-ensures for an event burst, and idle-releases', async (t) => {

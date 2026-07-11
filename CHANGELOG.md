@@ -6,6 +6,7 @@
 - Shared the worker/coordinator completion round; coordinator history now truncates tool results to 8,000 characters and reports empty token-limit completions as errors.
 - Fixed the coordinator tools payload for strict OpenAI-compatible providers: board tool schemas are now sent as `function.parameters` instead of the MCP `inputSchema` key, which Cerebras rejected with HTTP 400.
 - Sorted the coordinator model dropdown: `@main` profile entries first, alphabetical within each profile group.
+- The coordinator dropdown now names the actual provider for cloud models (e.g. `(cerebras)`, `(OpenRouter)`) when Forge >= 0.12.28 reports the new `provider` field on `GET /models`; older Forge versions keep the generic `(provider)` tag.
 
 All notable changes to the Forge Relay extension.
 
