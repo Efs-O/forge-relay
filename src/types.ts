@@ -81,6 +81,7 @@ export type RuntimeBridgeStatus = 'inactive' | 'waiting' | 'linked' | 'follower'
 export interface SessionRoster {
     claude: boolean;
     codex: boolean;
+    forgeCoordinator?: boolean;
 }
 
 // Mode A = interactive /loop paste (the user's own Claude chat); Mode B = headless
@@ -90,6 +91,7 @@ export type ClaudeMode = 'A' | 'B';
 
 export interface RuntimeStatusSnapshot {
     claude: { status: RuntimeBridgeStatus; detail: string };
+    forgeCoordinator: { status: RuntimeBridgeStatus; detail: string; model: string };
     roster: SessionRoster;
     claudeMode: ClaudeMode;
 }
@@ -102,6 +104,7 @@ export type ExtensionMessage =
     | { type: 'notice'; message: string }
     | { type: 'sessionState'; session: SessionState }
     | { type: 'runtimeStatus'; runtime: RuntimeStatusSnapshot }
+    | { type: 'forgeModels'; models: Array<{ name: string; profile?: string; servable?: boolean }>; error?: string }
     | { type: 'autonomyState'; mode: 'draft' | 'clanker' }
     | { type: 'sessionList'; sessions: SessionSummary[] }
     | { type: 'sessionEvents'; id: string; events: BoardEvent[] };
@@ -119,7 +122,7 @@ export type WebviewMessage =
     | { type: 'newSession'; agent: string; label?: string }
     | { type: 'listSessions' }
     | { type: 'loadSession'; id: string }
-    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode }
+    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode; forgeCoordinatorModel?: string }
     | { type: 'disconnectSession'; agent: string }
     | { type: 'toggleAutonomy' }
     | { type: 'ready' };

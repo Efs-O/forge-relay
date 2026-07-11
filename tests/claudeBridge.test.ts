@@ -7,7 +7,14 @@ const {
     buildKeepAliveMessage,
     collectToolNames,
     extractTelemetry,
+    shouldTrigger,
 } = require('../scripts/claude-auto-bridge.js');
+
+test('shared bridge event filter suppresses self posts and session markers', () => {
+    assert.equal(shouldTrigger({ type: 'post', agent: 'forge-coordinator', message: 'mine' }, 'forge-coordinator', 'all'), false);
+    assert.equal(shouldTrigger({ type: 'post', agent: 'user', message: 'SESSION_START' }, 'forge-coordinator', 'all'), false);
+    assert.equal(shouldTrigger({ type: 'post', agent: 'user', message: 'work' }, 'forge-coordinator', 'all'), true);
+});
 
 test('Claude bridge parses debug keep-alive flags', () => {
     const args = parseArgs([

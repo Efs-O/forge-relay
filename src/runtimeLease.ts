@@ -112,12 +112,14 @@ export class RuntimeLease {
 
     releaseIfOwned(): void {
         try {
-            if (this.readCurrent()?.pid === this.ownerPid) { fs.unlinkSync(this.leasePath); }
+            const current = this.readCurrent();
+            if (current?.pid === this.ownerPid && current.agent === this.agent) { fs.unlinkSync(this.leasePath); }
         } catch { /* best effort */ }
     }
 
     isOwned(): boolean {
-        return this.readCurrent()?.pid === this.ownerPid;
+        const current = this.readCurrent();
+        return current?.pid === this.ownerPid && current.agent === this.agent;
     }
 
     private tryAcquireInternal(canReap: boolean, success: RuntimeLeaseAcquireResult): RuntimeLeaseAcquireResult {
@@ -143,7 +145,7 @@ export class RuntimeLease {
         if (!current) {
             return canReap ? this.reapAndRetry('recovered-stale') : 'held-by-live-other';
         }
-        if (current.pid === this.ownerPid) { return 'acquired'; }
+        if (current.pid === this.ownerPid && current.agent === this.agent) { return 'acquired'; }
 
         if (current.extensionVersion !== this.extensionVersion) {
             if (!canReap) { return 'held-by-live-other'; }
@@ -170,7 +172,7 @@ export class RuntimeLease {
 
     private updateOwned(patch: Partial<RuntimeLeaseRecord>): void {
         const current = this.readCurrent();
-        if (!current || current.pid !== this.ownerPid) { return; }
+        if (!current || current.pid !== this.ownerPid || current.agent !== this.agent) { return; }
         try { fs.writeFileSync(this.leasePath, JSON.stringify({ ...current, ...patch }, null, 2) + '\n', 'utf8'); } catch { /* best effort */ }
     }
 }

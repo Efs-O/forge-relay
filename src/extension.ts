@@ -97,6 +97,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         mcpStdioPath: path.join(context.extensionUri.fsPath, 'out', 'mcpStdio.js'),
         mcpUrl: `http://127.0.0.1:${port}/sse`,
         extensionVersion: String(context.extension.packageJSON.version || 'dev'),
+        bridge,
+        subagentBackends,
+        forgeControlUrl: subagentBackends.forgeControlUrl,
         repoRoot,
         eventsPath,
         nodePath: config.get<string>('nodePath', '').trim() || undefined,
@@ -124,6 +127,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void context.workspaceState.update(ROSTER_KEY, {
             roster: snapshot.roster,
             claudeMode: snapshot.claudeMode,
+            forgeCoordinatorModel: snapshot.forgeCoordinator.model,
         });
     });
     renderStatusBar();
@@ -137,9 +141,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Restore the previous session roster so selected bridges auto-reconnect
     // after a window reload (survives restart, per P2/P3).
-    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode }>(ROSTER_KEY);
-    if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex)) {
-        rm.setRoster({ ...savedSession.roster }, savedSession.claudeMode ?? 'A');
+    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode; forgeCoordinatorModel?: string }>(ROSTER_KEY);
+    if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex || savedSession.roster.forgeCoordinator)) {
+        await rm.setRoster({ ...savedSession.roster }, savedSession.claudeMode ?? 'A', savedSession.forgeCoordinatorModel);
     }
 
     context.subscriptions.push(
@@ -248,15 +252,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             dispose: () => {
                 mcpServer?.stop();
                 watcher.stop();
-                rm.stopAll();
+                void rm.stopAll();
             }
         }
     );
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
     mcpServer?.stop();
-    runtimeManager?.stopAll();
+    await runtimeManager?.stopAll();
 }
 
 // ── Board event → VS Code notification ───────────────────────────────────────

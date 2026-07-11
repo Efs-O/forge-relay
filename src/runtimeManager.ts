@@ -2,6 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AgentRuntimeBridge, ScriptRuntimeBridge, RuntimeStatus } from './runtimeBridge';
 import { ClaudeMode, SessionRoster } from './types';
+import { Bridge } from './bridge';
+import { SubagentBackends } from './subagent';
+import { ForgeCoordinatorBridge } from './forgeCoordinatorBridge';
 
 export interface RuntimeAgentSnapshot {
     status: RuntimeStatus;
@@ -10,6 +13,7 @@ export interface RuntimeAgentSnapshot {
 
 export interface RuntimeSnapshot {
     claude: RuntimeAgentSnapshot;
+    forgeCoordinator: RuntimeAgentSnapshot & { model: string };
     roster: SessionRoster;
     claudeMode: ClaudeMode;
 }
@@ -23,6 +27,9 @@ export interface RuntimeManagerOptions {
     mcpUrl: string;
     /** Version of the supervising extension, used to reap old bridge builds. */
     extensionVersion: string;
+    bridge: Bridge;
+    subagentBackends: SubagentBackends;
+    forgeControlUrl?: string;
     repoRoot: string;
     eventsPath: string;
     nodePath?: string;
@@ -68,6 +75,8 @@ export interface RuntimeManagerOptions {
  */
 export class RuntimeManager {
     private readonly claude: ScriptRuntimeBridge;
+    private readonly forgeCoordinator: ForgeCoordinatorBridge | null;
+    private forgeStatus: RuntimeAgentSnapshot = { status: 'inactive', detail: 'Not connected.' };
     private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
     private roster: SessionRoster = { claude: false, codex: false };
     // Default matches the session-start modal's pre-checked option (Mode B,
@@ -80,12 +89,20 @@ export class RuntimeManager {
     private readonly repoRoot: string;
     private readonly subagentEnv?: Record<string, string>;
     private readonly onLog?: (line: string) => void;
+    private readonly forgeControlUrl?: string;
 
     constructor(opts: RuntimeManagerOptions) {
         this.mcpStdioPath = opts.mcpStdioPath;
         this.repoRoot = opts.repoRoot;
         this.subagentEnv = opts.subagentEnv;
         this.onLog = opts.onLog;
+        this.forgeControlUrl = opts.forgeControlUrl;
+        this.forgeCoordinator = opts.forgeControlUrl ? new ForgeCoordinatorBridge({
+            bridge: opts.bridge, backends: opts.subagentBackends, controlUrl: opts.forgeControlUrl,
+            boardEndpoint: opts.mcpUrl, eventsPath: opts.eventsPath, repoRoot: opts.repoRoot,
+            extensionVersion: opts.extensionVersion, onLog: opts.onLog,
+            onStatus: (status, detail) => { this.forgeStatus = { status, detail }; this.emit(); },
+        }) : null;
 
         // Attach the Forge Relay MCP server. Mode defaults to the orchestrator
         // policy (react to the operator + @mentions, not peer chatter).
@@ -125,6 +142,7 @@ export class RuntimeManager {
     getSnapshot(): RuntimeSnapshot {
         return {
             claude: { status: this.claude.status(), detail: this.claude.detailText() },
+            forgeCoordinator: { ...this.forgeStatus, model: this.forgeCoordinator?.selectedModel() ?? '' },
             roster: { ...this.roster },
             claudeMode: this.claudeMode,
         };
@@ -138,19 +156,32 @@ export class RuntimeManager {
         return this.claudeMode;
     }
 
+    async listForgeCoordinatorModels(): Promise<Awaited<ReturnType<typeof ForgeCoordinatorBridge.listModels>>> {
+        if (!this.forgeCoordinator || !this.forgeControlUrl) {
+            throw new Error('Forge control URL is not configured.');
+        }
+        return ForgeCoordinatorBridge.listModels(this.forgeControlUrl);
+    }
+
     /**
      * Apply the orchestrator selection chosen at Connect (plan §2.4). The Claude
      * headless bridge runs only for selected + Mode B; Mode A is the user's own
      * /loop paste (no managed process). roster.codex is informational only —
      * Codex joins via its own MCP session, never a Relay-spawned process.
      */
-    setRoster(roster: SessionRoster, claudeMode: ClaudeMode): void {
+    async setRoster(roster: SessionRoster, claudeMode: ClaudeMode, forgeModel?: string): Promise<void> {
         this.roster = { ...roster };
         this.claudeMode = claudeMode;
 
-        if (roster.claude && claudeMode === 'B') {
+        if (forgeModel) {
+            this.claude.stop();
+            if (!this.forgeCoordinator) throw new Error('Forge control URL is not configured.');
+            await this.forgeCoordinator.start(forgeModel);
+        } else if (roster.claude && claudeMode === 'B') {
+            void this.forgeCoordinator?.stop();
             this.claude.start();
         } else {
+            void this.forgeCoordinator?.stop();
             this.claude.stop();
         }
 
@@ -221,12 +252,13 @@ export class RuntimeManager {
 
     /** Whether any managed runtime is currently active (or trying to be). */
     isAnyActive(): boolean {
-        return this.claude.status() !== 'inactive';
+        return this.claude.status() !== 'inactive' || this.forgeStatus.status !== 'inactive';
     }
 
-    stopAll(): void {
-        this.roster = { claude: false, codex: false };
+    async stopAll(): Promise<void> {
+        this.roster = { claude: false, codex: false, forgeCoordinator: false };
         this.claude.stop();
+        await this.forgeCoordinator?.stop();
     }
 
     private emit(): void {

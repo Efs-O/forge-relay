@@ -24,6 +24,10 @@ const connectModal = /** @type {HTMLElement} */ (document.getElementById('connec
 const promptClaude = /** @type {HTMLElement} */ (document.getElementById('prompt-claude'));
 const rosterClaude = /** @type {HTMLInputElement} */ (document.getElementById('roster-claude'));
 const rosterCodex = /** @type {HTMLInputElement} */ (document.getElementById('roster-codex'));
+const rosterForge = /** @type {HTMLInputElement} */ (document.getElementById('roster-forge'));
+const forgeModelBlock = /** @type {HTMLElement} */ (document.getElementById('forge-model-block'));
+const forgeModel = /** @type {HTMLSelectElement} */ (document.getElementById('forge-model'));
+const forgeModelError = /** @type {HTMLElement} */ (document.getElementById('forge-model-error'));
 const claudePromptBlock = /** @type {HTMLElement} */ (document.getElementById('claude-prompt-block'));
 const claudeModeBlock = /** @type {HTMLElement} */ (document.getElementById('claude-mode-block'));
 const codexInfoBlock = /** @type {HTMLElement} */ (document.getElementById('codex-info-block'));
@@ -99,6 +103,12 @@ window.addEventListener('message', (/** @type {MessageEvent} */ event) => {
         if (lastPresence.claude) {
             renderAgentCard('claude', lastPresence.claude, currentSessionState ?? undefined);
         }
+    }
+    if (msg.type === 'forgeModels') {
+        forgeModel.innerHTML = msg.models.length
+            ? msg.models.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}${m.servable === false ? ' (provider)' : ''}</option>`).join('')
+            : '<option value="">No Forge models available</option>';
+        forgeModelError.textContent = msg.error || '';
     }
 });
 
@@ -300,6 +310,11 @@ function updateModalVisibility() {
     claudeModeBlock?.classList.toggle('hidden', !claudeOn);
     claudePromptBlock?.classList.toggle('hidden', !(claudeOn && mode === 'A'));
     codexInfoBlock?.classList.remove('hidden');
+    forgeModelBlock?.classList.toggle('hidden', !rosterForge?.checked);
+    if (rosterForge?.checked) {
+        rosterClaude.checked = false;
+        rosterCodex.checked = false;
+    }
 }
 
 function selectedClaudeMode() {
@@ -453,6 +468,7 @@ document.getElementById('btn-connect')?.addEventListener('click', () => {
     if (currentRoster) {
         rosterClaude.checked = Boolean(currentRoster.claude);
         rosterCodex.checked = Boolean(currentRoster.codex);
+        rosterForge.checked = Boolean(currentRoster.forgeCoordinator);
     }
     updateModalVisibility();
     connectModal.classList.remove('hidden');
@@ -466,8 +482,8 @@ document.getElementById('btn-disconnect')?.addEventListener('click', () => {
 document.getElementById('btn-close-modal')?.addEventListener('click', closeModal);
 
 document.getElementById('btn-confirm-connect')?.addEventListener('click', () => {
-    const roster = { claude: rosterClaude?.checked ?? true, codex: rosterCodex?.checked ?? true };
-    if (!roster.claude && !roster.codex) {
+    const roster = { claude: rosterClaude?.checked ?? true, codex: rosterCodex?.checked ?? true, forgeCoordinator: rosterForge?.checked ?? false };
+    if (!roster.claude && !roster.codex && !roster.forgeCoordinator) {
         showBanner('Select at least one orchestrator.', 'error');
         return;
     }
@@ -476,12 +492,14 @@ document.getElementById('btn-confirm-connect')?.addEventListener('click', () => 
         agent: agent(),
         roster,
         claudeMode: selectedClaudeMode(),
+        forgeCoordinatorModel: roster.forgeCoordinator ? forgeModel.value : undefined,
     });
     closeModal();
 });
 
 rosterClaude?.addEventListener('change', updateModalVisibility);
 rosterCodex?.addEventListener('change', updateModalVisibility);
+rosterForge?.addEventListener('change', updateModalVisibility);
 for (const radio of document.querySelectorAll('input[name="claude-mode"]')) {
     radio.addEventListener('change', updateModalVisibility);
 }

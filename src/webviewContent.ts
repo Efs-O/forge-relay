@@ -8,13 +8,14 @@ export function getNonce(): string {
 
 /** Human-readable notice describing what Connect just started, given the roster. */
 export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode): string {
-    if (!roster.claude && !roster.codex) {
+    if (!roster.claude && !roster.codex && !roster.forgeCoordinator) {
         return 'No orchestrator selected - session posted but no agent will react.';
     }
     const parts: string[] = [];
     if (roster.codex) {
         parts.push('Codex expected through its own MCP session');
     }
+    if (roster.forgeCoordinator) parts.push('Forge model coordinator starting');
     if (roster.claude) {
         parts.push(claudeMode === 'A'
             ? 'paste the Claude /loop prompt to start Claude'
@@ -193,6 +194,12 @@ export function getWebviewHtml(
                 <h3>Orchestrators</h3>
                 <label class="check-row"><input type="checkbox" id="roster-claude" checked> Claude</label>
                 <label class="check-row"><input type="checkbox" id="roster-codex"> Codex via its own MCP session</label>
+                <label class="check-row"><input type="checkbox" id="roster-forge"> Forge model coordinator</label>
+                <div class="control-row hidden" id="forge-model-block">
+                    <label for="forge-model">Forge model</label>
+                    <select id="forge-model"><option value="">Loading Forge models...</option></select>
+                    <p id="forge-model-error" class="prompt-note"></p>
+                </div>
                 <p class="prompt-note modal-note">Normal Codex usage does not need Forge Relay to launch a second app-server. Select Codex here when your existing Codex session should participate on the board through the <code>forgerelay</code> MCP tools.</p>
             </div>
 
