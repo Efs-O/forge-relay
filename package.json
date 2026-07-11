@@ -190,7 +190,7 @@
         "forgeRelay.subagentForgeControlUrl": {
           "type": "string",
           "default": "",
-          "description": "Opt-in Forge model-control API base (e.g. http://127.0.0.1:8799). When set, dispatch_subagent routes unprefixed (and 'forge:'-prefixed) models through Forge, which loads the requested model on demand, waits until it is healthy, and returns its endpoint - eliminating 'fetch failed' / wrong-model errors. Leave empty to keep the direct bridge/ollama/direct routing."
+          "description": "Optional override for the Forge model-control API. Leave empty to discover the active Forge control server from its per-user registry. When available, unprefixed and 'forge:' models route through Forge."
         },
         "forgeRelay.ollamaAutoStart": {
           "type": "boolean",

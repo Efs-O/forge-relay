@@ -25,6 +25,12 @@ permission resolver exist. The Relay coordinator coordinates: it reads the
 board, claims work, dispatches workers, and posts results. It never receives
 edit, write, or terminal tools — in any phase.
 
+Forge publishes its live control endpoint in the per-user registry
+`%LOCALAPPDATA%/forge-llm/control-server.json`, including its PID, URL,
+start time, and version. Relay validates the PID, localhost URL, and `/healthz`
+before using it. `forgeRelay.subagentForgeControlUrl` is an explicit override,
+not a required hardcoded port; multiple Relay boards may share one Forge owner.
+
 ## Phase 0 (BLOCKER): Board-Keyed Bridge Singleton Lock
 
 Fix before any coordinator work and before Forge's delegation Phase 2 —
