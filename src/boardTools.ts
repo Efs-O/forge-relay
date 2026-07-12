@@ -1,10 +1,11 @@
 import { Bridge } from './bridge';
 import { SubagentBackends, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListModels } from './subagent';
 import { handleDispatchSubagent } from './subagentLoop';
+import { runCoordinatedBuild } from './buildWrapper';
 
 export const COORDINATOR_TOOL_NAMES = [
     'board_check', 'post', 'claim', 'release', 'ack_command', 'resolve_command',
-    'dispatch_subagent', 'list_models', 'get_status',
+    'dispatch_subagent', 'list_models', 'get_status', 'run_build',
 ] as const;
 
 export const BOARD_TOOL_SCHEMAS = [
@@ -17,6 +18,7 @@ export const BOARD_TOOL_SCHEMAS = [
     { name: 'resolve_command', description: 'Mark an operator command as resolved once work is stopped or paused.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
     DISPATCH_SUBAGENT_TOOL,
     LIST_MODELS_TOOL,
+    { name: 'run_build', description: 'Run the configured build command with board coordination: pre-flight check, claim the configured build target(s), run the command, post start/result, and release on success, failure, timeout, or operator STOP/PAUSE. The command itself is fixed by local config ("forgeRelay.build.command"), not by this call, so it cannot be redirected via arguments.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, note: { type: 'string', description: 'Optional context for the board post' } }, required: ['agent'] } },
 ];
 
 export async function executeBoardTool(bridge: Bridge, backends: SubagentBackends, name: string, args: Record<string, unknown>): Promise<string> {
@@ -48,6 +50,7 @@ export async function executeBoardTool(bridge: Bridge, backends: SubagentBackend
         case 'resolve_command': bridge.resolve(str(args.agent), str(args.command_id), str(args.note)); return `RESOLVED ${str(args.command_id)}`;
         case 'dispatch_subagent': return handleDispatchSubagent(bridge, backends, args);
         case 'list_models': return handleListModels(backends);
+        case 'run_build': return runCoordinatedBuild(bridge, backends, str(args.agent), str(args.note));
         default: return `Unknown tool: ${name}`;
     }
 }

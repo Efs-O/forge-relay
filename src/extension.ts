@@ -71,6 +71,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ollamaExecutable: config.get<string>('ollamaExecutable', '').trim() || undefined,
         codexExecutable: config.get<string>('codexExecutable', '').trim() || undefined,
         codexTimeoutMs: config.get<number>('codexWorkerTimeoutMs', 0) || undefined,
+        buildCommand: config.get<string>('build.command', '').trim() || undefined,
+        buildClaimTargets: config.get<string[]>('build.claimTargets', []).map(t => t.trim()).filter(Boolean),
+        buildTimeoutMs: config.get<number>('build.timeoutMs', 0) || undefined,
     };
     mcpServer = new McpServer(bridge, subagentBackends);
 

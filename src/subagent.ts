@@ -48,6 +48,12 @@ export interface SubagentBackends {
     codexExecutable?: string;
     /** Wall-clock cap for one `codex exec` worker run (default 15 min). */
     codexTimeoutMs?: number;
+    /** Shell command line the `run_build` tool executes (e.g. "npm run build"). Empty = tool disabled. */
+    buildCommand?: string;
+    /** Repo-relative paths `run_build` claims for the duration of the build. Empty = no claim, board_check-only. */
+    buildClaimTargets?: string[];
+    /** Wall-clock cap for one `run_build` run (default 10 min). */
+    buildTimeoutMs?: number;
 }
 
 export const DEFAULT_SUBAGENT_BACKENDS: SubagentBackends = {
@@ -78,6 +84,9 @@ export function subagentEnvFromBackends(backends: SubagentBackends): Record<stri
     if (backends.ollamaExecutable) { env.FORGERELAY_OLLAMA_EXECUTABLE = backends.ollamaExecutable; }
     if (backends.codexExecutable) { env.FORGERELAY_CODEX_EXECUTABLE = backends.codexExecutable; }
     if (backends.codexTimeoutMs) { env.FORGERELAY_CODEX_TIMEOUT_MS = String(backends.codexTimeoutMs); }
+    if (backends.buildCommand) { env.FORGERELAY_BUILD_COMMAND = backends.buildCommand; }
+    if (backends.buildClaimTargets?.length) { env.FORGERELAY_BUILD_CLAIM_TARGETS = backends.buildClaimTargets.join(','); }
+    if (backends.buildTimeoutMs) { env.FORGERELAY_BUILD_TIMEOUT_MS = String(backends.buildTimeoutMs); }
     return env;
 }
 
