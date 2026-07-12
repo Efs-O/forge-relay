@@ -135,6 +135,34 @@ export function getWebviewHtml(
                     <div id="claims-list" class="empty-msg">No active claims.</div>
                 </section>
 
+                <section id="tasks-section" class="panel-section">
+                    <div class="section-head">
+                        <h2>Task Cards</h2>
+                        <p>Tracked work items and handoffs.</p>
+                    </div>
+                    <div id="tasks-list" class="empty-msg">No tasks.</div>
+                    <div class="control-row">
+                        <label for="task-title">Title</label>
+                        <input id="task-title" type="text" placeholder="Task title">
+                    </div>
+                    <div class="control-row">
+                        <label for="task-severity">Severity</label>
+                        <select id="task-severity">
+                            <option value="low">low</option>
+                            <option value="medium" selected>medium</option>
+                            <option value="high">high</option>
+                            <option value="critical">critical</option>
+                        </select>
+                    </div>
+                    <div class="control-row">
+                        <label for="task-owner">Owner</label>
+                        <input id="task-owner" type="text" placeholder="unassigned">
+                    </div>
+                    <div class="button-row">
+                        <button id="btn-create-task">Create Task</button>
+                    </div>
+                </section>
+
                 <section id="commands-section" class="panel-section">
                     <div class="section-head commands-head">
                         <div>

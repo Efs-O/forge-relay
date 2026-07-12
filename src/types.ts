@@ -27,17 +27,35 @@ export interface Command {
 
 export interface BoardEvent {
     timestamp: string;
-    type: 'claim' | 'release' | 'post' | 'command' | 'ack' | 'resolve' | 'expired';
+    type: 'claim' | 'release' | 'post' | 'command' | 'ack' | 'resolve' | 'expired' | 'task';
     agent: string;
     paths: string[];
     message: string;
     meta?: Record<string, unknown>;
 }
 
+export type TaskState = 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
+export type TaskSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export interface Task {
+    id: string;
+    title: string;
+    description?: string;
+    state: TaskState;
+    severity: TaskSeverity;
+    owner?: string;
+    blocking_reason?: string;
+    depends_on: string[];
+    created_at: string;
+    created_by: string;
+    updated_at: string;
+}
+
 export interface BoardState {
     generated_at: string;
     claims: Claim[];
     commands: Command[];
+    tasks: Task[];
     events: BoardEvent[];   // last 200 only
 }
 
@@ -125,4 +143,12 @@ export type WebviewMessage =
     | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode; forgeCoordinatorModel?: string }
     | { type: 'disconnectSession'; agent: string }
     | { type: 'toggleAutonomy' }
+    | { type: 'createTask'; agent: string; title: string; description?: string; severity?: TaskSeverity; owner?: string }
+    | { type: 'updateTask'; agent: string; taskId: string; title?: string; description?: string; severity?: TaskSeverity }
+    | { type: 'assignTask'; agent: string; taskId: string; owner: string }
+    | { type: 'startTask'; agent: string; taskId: string }
+    | { type: 'blockTask'; agent: string; taskId: string; reason: string }
+    | { type: 'unblockTask'; agent: string; taskId: string }
+    | { type: 'completeTask'; agent: string; taskId: string }
+    | { type: 'cancelTask'; agent: string; taskId: string; note?: string }
     | { type: 'ready' };

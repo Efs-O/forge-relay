@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { Claim, Command, BoardEvent, BoardState, SessionState, AgentPresence, SessionSummary } from './types';
+import { Claim, Command, BoardEvent, BoardState, SessionState, AgentPresence, SessionSummary, Task, TaskState, TaskSeverity } from './types';
 
 const LOCK_TIMEOUT_MS = 10_000;
 const LOCK_STALE_MS = 30_000;
@@ -12,10 +12,22 @@ const EVENTS_MAX = 200;
 const EVENTS_ROTATE_BYTES = 1_000_000;
 // B6: which agents an "all" command waits on before it counts as acknowledged.
 const EXPECTED_ALL_AGENTS = ['claude', 'codex'];
+const TASK_SEVERITIES: TaskSeverity[] = ['low', 'medium', 'high', 'critical'];
+// Terminal states (done, cancelled) have no outgoing transitions. From open you
+// can jump straight to done/cancelled (skip is a normal real-world outcome);
+// blocked <-> in_progress is the only reversible pair.
+const TASK_TRANSITIONS: Record<TaskState, TaskState[]> = {
+    open: ['in_progress', 'blocked', 'done', 'cancelled'],
+    in_progress: ['blocked', 'done', 'cancelled'],
+    blocked: ['in_progress', 'done', 'cancelled'],
+    done: [],
+    cancelled: [],
+};
 
 export class Bridge {
     private readonly coordDir: string;
     private readonly claimsPath: string;
+    private readonly tasksPath: string;
     private readonly eventsPath: string;
     private readonly eventsArchivePath: string;
     private readonly commandsPath: string;
@@ -30,6 +42,7 @@ export class Bridge {
         this.repoRoot = repoRoot;
         this.coordDir = path.join(repoRoot, '.coordination');
         this.claimsPath = path.join(this.coordDir, 'claims.json');
+        this.tasksPath = path.join(this.coordDir, 'tasks.json');
         this.eventsPath = path.join(this.coordDir, 'events.ndjson');
         this.eventsArchivePath = path.join(this.coordDir, 'events.ndjson.1');
         this.commandsPath = path.join(this.coordDir, 'commands.json');
@@ -194,6 +207,104 @@ export class Bridge {
         return resolved;
     }
 
+    // ── Task cards (FR-5) ───────────────────────────────────────────────────
+
+    createTask(agent: string, title: string, opts: { description?: string; severity?: TaskSeverity; owner?: string } = {}): Task {
+        const trimmedTitle = title.trim();
+        if (!trimmedTitle) { throw new Error('Task title must not be empty'); }
+        const severity = opts.severity ?? 'medium';
+        this.assertSeverity(severity);
+        let task!: Task;
+        this.withLock('createTask', () => {
+            const state = this.readTasks();
+            const now = new Date().toISOString();
+            task = {
+                id: crypto.randomUUID(),
+                title: trimmedTitle,
+                description: opts.description?.trim() || undefined,
+                state: 'open',
+                severity,
+                owner: opts.owner?.trim() || undefined,
+                depends_on: [],
+                created_at: now,
+                created_by: agent,
+                updated_at: now,
+            };
+            state.tasks.push(task);
+            this.writeTasks(state);
+            this.appendEvent({ type: 'task', agent, paths: [], message: `created: ${task.title}`, meta: { task_id: task.id, state: task.state, severity: task.severity } });
+        });
+        return task;
+    }
+
+    /** Update title/description/severity in place. Does not touch lifecycle state — use the transition methods for that. */
+    updateTask(agent: string, taskId: string, patch: { title?: string; description?: string; severity?: TaskSeverity }): Task {
+        if (patch.severity !== undefined) { this.assertSeverity(patch.severity); }
+        let task!: Task;
+        this.withLock('updateTask', () => {
+            const state = this.readTasks();
+            task = this.findTask(state.tasks, taskId);
+            if (patch.title !== undefined) {
+                const trimmed = patch.title.trim();
+                if (!trimmed) { throw new Error('Task title must not be empty'); }
+                task.title = trimmed;
+            }
+            if (patch.description !== undefined) { task.description = patch.description.trim() || undefined; }
+            if (patch.severity !== undefined) { task.severity = patch.severity; }
+            task.updated_at = new Date().toISOString();
+            this.writeTasks(state);
+            this.appendEvent({ type: 'task', agent, paths: [], message: `updated: ${task.title}`, meta: { task_id: task.id, state: task.state, severity: task.severity } });
+        });
+        return task;
+    }
+
+    assignTask(agent: string, taskId: string, owner: string): Task {
+        const trimmedOwner = owner.trim();
+        if (!trimmedOwner) { throw new Error('Task owner must not be empty'); }
+        let task!: Task;
+        this.withLock('assignTask', () => {
+            const state = this.readTasks();
+            task = this.findTask(state.tasks, taskId);
+            task.owner = trimmedOwner;
+            task.updated_at = new Date().toISOString();
+            this.writeTasks(state);
+            this.appendEvent({ type: 'task', agent, paths: [], message: `assigned to ${trimmedOwner}: ${task.title}`, meta: { task_id: task.id, state: task.state, owner: trimmedOwner } });
+        });
+        return task;
+    }
+
+    /** open|blocked -> in_progress. */
+    startTask(agent: string, taskId: string): Task {
+        return this.transitionTask(agent, taskId, 'in_progress', (task) => { task.blocking_reason = undefined; });
+    }
+
+    /** open|in_progress -> blocked. Blocker state is metadata on the task, distinct from operator STOP/PAUSE commands. */
+    blockTask(agent: string, taskId: string, reason: string): Task {
+        const trimmedReason = reason.trim();
+        if (!trimmedReason) { throw new Error('A blocking reason is required to block a task'); }
+        return this.transitionTask(agent, taskId, 'blocked', (task) => { task.blocking_reason = trimmedReason; });
+    }
+
+    /** blocked -> in_progress. Alias of startTask() kept as a distinct call for a clearer audit-feed message. */
+    unblockTask(agent: string, taskId: string): Task {
+        return this.transitionTask(agent, taskId, 'in_progress', (task) => { task.blocking_reason = undefined; });
+    }
+
+    completeTask(agent: string, taskId: string): Task {
+        return this.transitionTask(agent, taskId, 'done', (task) => { task.blocking_reason = undefined; });
+    }
+
+    cancelTask(agent: string, taskId: string, note?: string): Task {
+        return this.transitionTask(agent, taskId, 'cancelled', (task) => {
+            task.blocking_reason = undefined;
+            if (note?.trim()) { task.description = task.description ? `${task.description}\n\ncancelled: ${note.trim()}` : `cancelled: ${note.trim()}`; }
+        });
+    }
+
+    listTasks(): Task[] {
+        return this.readTasks().tasks;
+    }
+
     endSession(agent: string): void {
         this.post(agent, 'SESSION_END');
     }
@@ -296,8 +407,9 @@ export class Bridge {
         const now = new Date();
         const claims = this.readClaims().claims.filter(c => new Date(c.expires_at) > now);
         const commands = this.readCommands().commands;
+        const tasks = this.readTasks().tasks;
         const events = this.readEvents(EVENTS_MAX);
-        return { generated_at: now.toISOString(), claims, commands, events };
+        return { generated_at: now.toISOString(), claims, commands, tasks, events };
     }
 
     getSessionState(): SessionState {
@@ -384,6 +496,9 @@ export class Bridge {
         if (!fs.existsSync(this.claimsPath)) { fs.writeFileSync(this.claimsPath, '{"claims":[]}', 'utf8'); }
         if (!fs.existsSync(this.eventsPath)) { fs.writeFileSync(this.eventsPath, '', 'utf8'); }
         if (!fs.existsSync(this.commandsPath)) { fs.writeFileSync(this.commandsPath, '{"commands":[]}', 'utf8'); }
+        // New in FR-5: existing installs simply gain this file on first use — no
+        // migration needed, older Bridge builds just never read/write it.
+        if (!fs.existsSync(this.tasksPath)) { fs.writeFileSync(this.tasksPath, '{"tasks":[]}', 'utf8'); }
         this.removeStaleLock();
     }
 
@@ -490,6 +605,54 @@ export class Bridge {
 
     private writeCommands(state: { commands: Command[] }): void {
         this.writeFileAtomic(this.commandsPath, JSON.stringify(state, null, 2));
+    }
+
+    private readTasks(): { tasks: Task[] } {
+        try {
+            const raw = fs.readFileSync(this.tasksPath, 'utf8').trim();
+            return raw ? JSON.parse(raw) : { tasks: [] };
+        } catch { return { tasks: [] }; }
+    }
+
+    private writeTasks(state: { tasks: Task[] }): void {
+        this.writeFileAtomic(this.tasksPath, JSON.stringify(state, null, 2));
+    }
+
+    /** Look up a task by exact id or unambiguous prefix, mirroring findCommand(). */
+    private findTask(tasks: Task[], taskId: string): Task {
+        const id = taskId.trim();
+        const exact = tasks.find(t => t.id === id);
+        if (exact) { return exact; }
+        if (id.length >= 6) {
+            const matches = tasks.filter(t => t.id.startsWith(id));
+            if (matches.length === 1) { return matches[0]; }
+            if (matches.length > 1) { throw new Error(`Ambiguous task id prefix: ${id} (${matches.length} matches)`); }
+        }
+        throw new Error(`Unknown task id: ${id}`);
+    }
+
+    private assertSeverity(severity: string): asserts severity is TaskSeverity {
+        if (!TASK_SEVERITIES.includes(severity as TaskSeverity)) {
+            throw new Error(`Invalid task severity: ${severity} (expected one of ${TASK_SEVERITIES.join(', ')})`);
+        }
+    }
+
+    private transitionTask(agent: string, taskId: string, next: TaskState, extra?: (task: Task) => void): Task {
+        let task!: Task;
+        this.withLock('transitionTask', () => {
+            const state = this.readTasks();
+            task = this.findTask(state.tasks, taskId);
+            const allowed = TASK_TRANSITIONS[task.state];
+            if (!allowed.includes(next)) {
+                throw new Error(`Invalid task transition: ${task.state} -> ${next} (task ${task.id.slice(0, 8)})`);
+            }
+            task.state = next;
+            task.updated_at = new Date().toISOString();
+            extra?.(task);
+            this.writeTasks(state);
+            this.appendEvent({ type: 'task', agent, paths: [], message: `${task.state}: ${task.title}`, meta: { task_id: task.id, state: task.state, severity: task.severity } });
+        });
+        return task;
     }
 
     private appendEvent(event: Omit<BoardEvent, 'timestamp'>): void {

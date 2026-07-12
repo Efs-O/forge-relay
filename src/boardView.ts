@@ -167,6 +167,30 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                 case 'release':
                     this.bridge.release(msg.agent, msg.targets, msg.note ?? '');
                     break;
+                case 'createTask':
+                    this.bridge.createTask(msg.agent, msg.title, { description: msg.description, severity: msg.severity, owner: msg.owner });
+                    break;
+                case 'updateTask':
+                    this.bridge.updateTask(msg.agent, msg.taskId, { title: msg.title, description: msg.description, severity: msg.severity });
+                    break;
+                case 'assignTask':
+                    this.bridge.assignTask(msg.agent, msg.taskId, msg.owner);
+                    break;
+                case 'startTask':
+                    this.bridge.startTask(msg.agent, msg.taskId);
+                    break;
+                case 'blockTask':
+                    this.bridge.blockTask(msg.agent, msg.taskId, msg.reason);
+                    break;
+                case 'unblockTask':
+                    this.bridge.unblockTask(msg.agent, msg.taskId);
+                    break;
+                case 'completeTask':
+                    this.bridge.completeTask(msg.agent, msg.taskId);
+                    break;
+                case 'cancelTask':
+                    this.bridge.cancelTask(msg.agent, msg.taskId, msg.note);
+                    break;
                 case 'connectSession': {
                     // P3: apply the chosen roster. Only selected agents participate
                     // in the session; Codex joins via its own MCP session.

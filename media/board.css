@@ -121,6 +121,8 @@ body {
 .empty-msg,
 .claim-meta,
 .claim-expiry,
+.task-description,
+.task-meta,
 .command-meta,
 .event-time {
     color: var(--muted);
@@ -194,7 +196,8 @@ body {
 .session-actions,
 .button-row,
 .modal-actions,
-.command-actions {
+.command-actions,
+.task-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
@@ -374,7 +377,8 @@ body {
 }
 
 .claim-card,
-.command-card {
+.command-card,
+.task-card {
     padding: 12px;
     border-radius: 12px;
     background: color-mix(in srgb, var(--vscode-editor-background) 90%, transparent);
@@ -382,7 +386,8 @@ body {
 }
 
 .claim-top,
-.command-top {
+.command-top,
+.task-top {
     display: flex;
     justify-content: space-between;
     gap: 8px;
@@ -391,7 +396,8 @@ body {
 }
 
 .claim-agent,
-.command-text {
+.command-text,
+.task-title {
     font-weight: 700;
 }
 
@@ -412,6 +418,74 @@ body {
 
 .command-card.pause {
     border-left: 3px solid #d4a53a;
+}
+
+.task-card.severity-critical {
+    border-left: 3px solid var(--vscode-errorForeground);
+}
+
+.task-card.severity-high {
+    border-left: 3px solid var(--vscode-charts-orange);
+}
+
+.task-card.severity-medium {
+    border-left: 3px solid var(--vscode-charts-yellow);
+}
+
+.task-card.severity-low {
+    border-left: 3px solid var(--vscode-descriptionForeground);
+}
+
+.task-card.state-done,
+.task-card.state-cancelled {
+    opacity: 0.6;
+}
+
+.task-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.task-badge {
+    padding: 3px 7px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    background: color-mix(in srgb, var(--vscode-badge-background) 75%, transparent);
+    color: var(--vscode-badge-foreground);
+}
+
+.task-badge.severity {
+    background: color-mix(in srgb, var(--vscode-button-background) 75%, transparent);
+}
+
+.task-description {
+    line-height: 1.4;
+    margin-bottom: 6px;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.task-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.76rem;
+    margin-bottom: 8px;
+}
+
+.task-blocking {
+    margin-bottom: 8px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--vscode-inputValidation-warningBackground) 60%, transparent);
+    border: 1px solid color-mix(in srgb, var(--vscode-inputValidation-warningBorder) 70%, transparent);
+    color: var(--vscode-inputValidation-warningForeground);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    word-break: break-word;
 }
 
 .command-status {
