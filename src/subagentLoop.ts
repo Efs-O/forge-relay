@@ -5,7 +5,7 @@ import {
     SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote, beginWorkerRun, endWorkerRun, formatWorkerPost,
     decideForgeRoute, fetchForgeCatalog, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
-import { forgeHolds, forgeSlots } from './forgeHold';
+import { forgeHolds, forgeSlots, Semaphore } from './forgeHold';
 import { ensureOllamaDaemon } from './daemonSupervisor';
 import {
     isCodexModel, codexModelOverride, codexDefaultModel, buildCodexPrompt, probeCodexCli, runCodexExec,
@@ -39,6 +39,17 @@ export interface WorkerLoopResult {
 }
 
 const MAX_STEPS_DEFAULT = 12;
+
+/**
+ * Codex concurrency guard (see docs/NOTE-codex-concurrency-guard.md). Overlapping
+ * `codex exec` dispatches were each getting their own untracked process with no
+ * queue — a real risk given a second concurrent `codex exec` under the same
+ * ChatGPT OAuth login can trip `token_revoked` and kill both sessions. This caps
+ * Codex dispatches to one in flight at a time; extra dispatches queue instead of
+ * racing. To revert: delete this Semaphore, the `codexSlot.acquire()` /
+ * `releaseSlot()` calls in `runCodex` below, and the `Semaphore` import above.
+ */
+const codexSlot = new Semaphore(1);
 
 /**
  * Worker system prompt. Contract: this must ALWAYS return a non-empty string —
@@ -212,6 +223,7 @@ export async function handleDispatchSubagent(
 
         const runCodex = async (mentionDispatcher: boolean): Promise<string> => {
             const wake = mentionDispatcher ? `${dispatcher}: ` : '';
+            const releaseSlot = await codexSlot.acquire();
             try {
                 const res = await runCodexExec({
                     executable: backends.codexExecutable,
@@ -240,6 +252,7 @@ export async function handleDispatchSubagent(
                 bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${error}`));
                 return `SUBAGENT ${subagentId} (${model}) ERROR: ${error}`;
             } finally {
+                releaseSlot();
                 finishWorkerRun();
             }
         };
