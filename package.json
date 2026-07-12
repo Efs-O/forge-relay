@@ -220,6 +220,22 @@
             "clanker"
           ],
           "description": "Initial worker autonomy. 'draft' = workers are read-only and propose diffs (safe). 'clanker' = workers may write/edit/run directly, bounded by the destructive-command denylist. Toggle live with the board pill or the Toggle Clanker Mode command."
+        },
+        "forgeRelay.build.command": {
+          "type": "string",
+          "default": "",
+          "description": "Shell command the 'run_build' MCP tool executes (e.g. \"npm run build\", \"dotnet build\"). Empty = the tool refuses to run. This is trusted local config, never a tool-call argument, so it cannot be redirected by a model."
+        },
+        "forgeRelay.build.claimTargets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Repo-relative paths 'run_build' claims for the duration of the build (e.g. [\"dist\"]). Empty = no claim is taken; the build only gets board_check-level coordination."
+        },
+        "forgeRelay.build.timeoutMs": {
+          "type": "number",
+          "default": 600000,
+          "description": "Wall-clock cap (ms) for one 'run_build' run; the process is killed past it. Default 10 minutes."
         }
       }
     }

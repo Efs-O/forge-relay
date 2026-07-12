@@ -76,6 +76,11 @@ const subagentBackends: SubagentBackends = {
     ollamaExecutable: process.env.FORGERELAY_OLLAMA_EXECUTABLE || undefined,
     codexExecutable: process.env.FORGERELAY_CODEX_EXECUTABLE || undefined,
     codexTimeoutMs: Number(process.env.FORGERELAY_CODEX_TIMEOUT_MS) || undefined,
+    buildCommand: process.env.FORGERELAY_BUILD_COMMAND || undefined,
+    buildClaimTargets: process.env.FORGERELAY_BUILD_CLAIM_TARGETS
+        ? process.env.FORGERELAY_BUILD_CLAIM_TARGETS.split(',').map(t => t.trim()).filter(Boolean)
+        : undefined,
+    buildTimeoutMs: Number(process.env.FORGERELAY_BUILD_TIMEOUT_MS) || undefined,
 };
 
 const server = new Server(
