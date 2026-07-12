@@ -153,6 +153,30 @@ export class BoardPanel {
                 case 'release':
                     this.bridge.release(msg.agent, msg.targets, msg.note ?? '');
                     break;
+                case 'createTask':
+                    this.bridge.createTask(msg.agent, msg.title, { description: msg.description, severity: msg.severity, owner: msg.owner });
+                    break;
+                case 'updateTask':
+                    this.bridge.updateTask(msg.agent, msg.taskId, { title: msg.title, description: msg.description, severity: msg.severity });
+                    break;
+                case 'assignTask':
+                    this.bridge.assignTask(msg.agent, msg.taskId, msg.owner);
+                    break;
+                case 'startTask':
+                    this.bridge.startTask(msg.agent, msg.taskId);
+                    break;
+                case 'blockTask':
+                    this.bridge.blockTask(msg.agent, msg.taskId, msg.reason);
+                    break;
+                case 'unblockTask':
+                    this.bridge.unblockTask(msg.agent, msg.taskId);
+                    break;
+                case 'completeTask':
+                    this.bridge.completeTask(msg.agent, msg.taskId);
+                    break;
+                case 'cancelTask':
+                    this.bridge.cancelTask(msg.agent, msg.taskId, msg.note);
+                    break;
                 case 'connectSession':
                     await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel);
                     this.bridge.startSession(msg.agent, {

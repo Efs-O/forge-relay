@@ -7,6 +7,7 @@ const vscode = acquireVsCodeApi();
 const eventFeed = /** @type {HTMLElement} */ (document.getElementById('event-feed'));
 const feedEmpty = /** @type {HTMLElement} */ (document.getElementById('feed-empty'));
 const claimsList = /** @type {HTMLElement} */ (document.getElementById('claims-list'));
+const tasksList = /** @type {HTMLElement} */ (document.getElementById('tasks-list'));
 const commandsList = /** @type {HTMLElement} */ (document.getElementById('commands-list'));
 const mcpPortBadge = /** @type {HTMLElement} */ (document.getElementById('mcp-port'));
 const lastActivity = /** @type {HTMLElement} */ (document.getElementById('last-activity'));
@@ -15,6 +16,9 @@ const banner = /** @type {HTMLElement} */ (document.getElementById('message-bann
 const ctrlAgent = /** @type {HTMLInputElement} */ (document.getElementById('ctrl-agent'));
 const ctrlNote = /** @type {HTMLTextAreaElement} */ (document.getElementById('ctrl-note'));
 const ctrlTarget = /** @type {HTMLInputElement} */ (document.getElementById('ctrl-target'));
+const taskTitle = /** @type {HTMLInputElement} */ (document.getElementById('task-title'));
+const taskSeverity = /** @type {HTMLSelectElement} */ (document.getElementById('task-severity'));
+const taskOwner = /** @type {HTMLInputElement} */ (document.getElementById('task-owner'));
 const sessionPicker = /** @type {HTMLSelectElement} */ (document.getElementById('session-picker'));
 const viewingBanner = /** @type {HTMLElement} */ (document.getElementById('viewing-banner'));
 const viewingBannerText = /** @type {HTMLElement} */ (document.getElementById('viewing-banner-text'));
@@ -113,11 +117,12 @@ window.addEventListener('message', (/** @type {MessageEvent} */ event) => {
 });
 
 /**
- * @param {{ claims: any[], commands: any[], events: any[] }} state
+ * @param {{ claims: any[], commands: any[], tasks?: any[], events: any[] }} state
  */
 function renderState(state) {
     latestEvents = state.events ?? [];
     renderClaims(state.claims ?? []);
+    renderTasks(state.tasks ?? []);
     renderCommands(state.commands ?? []);
     // While viewing a saved session, leave the feed frozen on that history;
     // the live state still updates claims/commands and the activity line.
@@ -221,6 +226,62 @@ function renderClaims(claims) {
             <div class="claim-meta">${esc(claim.note ?? '') || 'No note'}</div>
         </article>
     `).join('');
+}
+
+/** @param {any[]} tasks */
+function renderTasks(tasks) {
+    if (tasks.length === 0) {
+        tasksList.className = 'empty-msg';
+        tasksList.textContent = 'No tasks.';
+        return;
+    }
+
+    tasksList.className = 'stack-list';
+    tasksList.innerHTML = tasks.map(task => `
+        <article class="task-card severity-${esc(task.severity)} state-${esc(task.state)}">
+            <div class="task-top">
+                <span class="task-title">${esc(task.title)}</span>
+                <span class="task-badges">
+                    <span class="task-badge severity">${esc(task.severity)}</span>
+                    <span class="task-badge state">${esc(task.state)}</span>
+                </span>
+            </div>
+            ${task.description ? `<div class="task-description">${esc(task.description)}</div>` : ''}
+            <div class="task-meta">
+                <span>owner ${esc(task.owner || 'unassigned')}</span>
+                <span>created ${fmtRelativePast(task.created_at)}</span>
+                <span>updated ${fmtRelativePast(task.updated_at)}</span>
+            </div>
+            ${task.state === 'blocked' && task.blocking_reason ? `<div class="task-blocking">Blocked: ${esc(task.blocking_reason)}</div>` : ''}
+            ${renderTaskActions(task)}
+        </article>
+    `).join('');
+}
+
+/** @param {any} task */
+function renderTaskActions(task) {
+    const state = String(task.state ?? '');
+    if (state === 'done' || state === 'cancelled') {
+        return '';
+    }
+
+    const id = esc(task.id);
+    const actions = [];
+    if (state === 'open' || state === 'blocked') {
+        actions.push(`<button class="small" data-start-task="${id}">Start</button>`);
+    }
+    if (state === 'open' || state === 'in_progress') {
+        actions.push(`<button class="small" data-block-task="${id}">Block</button>`);
+    }
+    if (state === 'blocked') {
+        actions.push(`<button class="small" data-unblock-task="${id}">Unblock</button>`);
+    }
+    if (state === 'open' || state === 'in_progress' || state === 'blocked') {
+        actions.push(`<button class="small" data-complete-task="${id}">Complete</button>`);
+        actions.push(`<button class="small" data-cancel-task="${id}">Cancel</button>`);
+    }
+
+    return actions.length ? `<div class="task-actions">${actions.join('')}</div>` : '';
 }
 
 /** @param {any[]} commands */
@@ -398,6 +459,23 @@ document.getElementById('btn-clear-commands')?.addEventListener('click', () => {
     vscode.postMessage({ type: 'clearAllCommands', agent: agent(), note: 'Cleared from Forge Relay panel' });
 });
 
+document.getElementById('btn-create-task')?.addEventListener('click', () => {
+    const title = taskTitle.value.trim();
+    if (!title) {
+        return;
+    }
+    const owner = taskOwner.value.trim();
+    vscode.postMessage({
+        type: 'createTask',
+        agent: agent(),
+        title,
+        severity: taskSeverity.value,
+        owner: owner || undefined,
+    });
+    taskTitle.value = '';
+    taskOwner.value = '';
+});
+
 document.getElementById('btn-clear-history')?.addEventListener('click', () => {
     backToLive();
     vscode.postMessage({ type: 'clearHistory', agent: agent() });
@@ -506,6 +584,46 @@ for (const radio of document.querySelectorAll('input[name="claude-mode"]')) {
 
 document.getElementById('btn-copy-claude')?.addEventListener('click', async () => {
     await copyPrompt(promptClaude.textContent || '');
+});
+
+tasksList.addEventListener('click', event => {
+    const target = /** @type {HTMLElement | null} */ (event.target instanceof HTMLElement ? event.target : null);
+    if (!target) {
+        return;
+    }
+
+    const startId = target.getAttribute('data-start-task');
+    if (startId) {
+        vscode.postMessage({ type: 'startTask', agent: agent(), taskId: startId });
+        return;
+    }
+
+    const blockId = target.getAttribute('data-block-task');
+    if (blockId) {
+        const reason = window.prompt('Blocking reason:')?.trim();
+        if (!reason) {
+            return;
+        }
+        vscode.postMessage({ type: 'blockTask', agent: agent(), taskId: blockId, reason });
+        return;
+    }
+
+    const unblockId = target.getAttribute('data-unblock-task');
+    if (unblockId) {
+        vscode.postMessage({ type: 'unblockTask', agent: agent(), taskId: unblockId });
+        return;
+    }
+
+    const completeId = target.getAttribute('data-complete-task');
+    if (completeId) {
+        vscode.postMessage({ type: 'completeTask', agent: agent(), taskId: completeId });
+        return;
+    }
+
+    const cancelId = target.getAttribute('data-cancel-task');
+    if (cancelId) {
+        vscode.postMessage({ type: 'cancelTask', agent: agent(), taskId: cancelId });
+    }
 });
 
 commandsList.addEventListener('click', event => {
