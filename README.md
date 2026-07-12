@@ -399,8 +399,8 @@ Maintained by [Efs-O](https://github.com/Efs-O) — amandoulou@yahoo.gr
 ## Roadmap
 
 - [x] Push board updates to webviews from intra-process board events (with a slow polling backstop)
-- [ ] Folder-level claim conflict detection (parent/child path overlap)
-- [ ] Build hook wrappers (auto-claim before `dotnet build`, auto-post result)
-- [ ] Session snapshots - periodic markdown export of current split and open blockers
-- [ ] Task cards with blocker state and severity tags
-- [ ] VS Code Marketplace publish
+- [x] Folder-level claim conflict detection (parent/child path overlap)
+- [x] Build hook wrapper (`run_build`: pre-flight, configured claims, result post, and cleanup)
+- [x] Task cards with blocker state and severity tags
+- [x] VS Code Marketplace publish ([Efsoo.forge-relay](https://marketplace.visualstudio.com/items?itemName=Efsoo.forge-relay), v0.5.1)
+- [ ] Session snapshots - Markdown export of the current split and open blockers (FR-4; explicitly deferred)

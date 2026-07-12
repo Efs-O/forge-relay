@@ -1,6 +1,6 @@
 # Forge Coordinator Plan
 
-## Implementation Status (2026-07-11, Relay 0.5.0)
+## Implementation Status (refreshed 2026-07-13, Relay 0.5.1)
 
 ### Completed and packaged
 
@@ -16,11 +16,12 @@
   setting override first, otherwise the per-user Forge registry with PID,
   localhost URL, and `/healthz` validation. The live Forge 0.12.27 registry was
   validated successfully.
-- Automated gates currently pass: TypeScript, production bundle, and 102 tests.
+- Automated gates passed for the 0.5.1 release: TypeScript, production bundle,
+  and 132 tests. The Marketplace listing now serves `Efsoo.forge-relay` 0.5.1.
 
 ### Validation still required
 
-- Install the 0.5.0 VSIX and run the four manual quality-gate smokes below:
+- Install the 0.5.1 VSIX and run the four manual quality-gate smokes below:
   end-to-end worker dispatch, STOP during completion, Forge restart recovery,
   and Claude Mode B regression.
 - Run the coordinator on a real board for at least one week before evaluating

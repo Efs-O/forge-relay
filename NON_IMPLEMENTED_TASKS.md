@@ -1,7 +1,16 @@
-# Forge Relay — Non-Implemented Tasks
+# Forge Relay — Deferred Work and Historical Acceptance Criteria
 
-This document consolidates the work that is still unimplemented from the three
-most recently modified Markdown files reviewed on 2026-07-12:
+This document records the implementation-plan review last refreshed on
+2026-07-13. FR-1, FR-2, FR-3, FR-5, and FR-6 are complete and released in
+`Efsoo.forge-relay` v0.5.1. FR-4 is intentionally deferred; it is not part of
+the current release scope.
+
+The completed-task sections below are retained as historical acceptance
+criteria and implementation evidence. The only active implementation item is
+FR-4, when it is explicitly resumed.
+
+The review originally consolidated the three most recently modified Markdown
+files reviewed on 2026-07-12:
 
 - `CHANGELOG.md`
 - `README.md`
@@ -18,11 +27,11 @@ and one related documentation/behavior gap around folder claims.
 | FR-1 | Parent/child folder claim conflict detection | **Done** (`pathsOverlap()` in `src/bridge.ts`) | High |
 | FR-2 | Push instead of two-second UI polling | **Done** (per-view `BoardWatcher` + 10s backstop) | Medium |
 | FR-3 | Build hook wrappers | **Done** (`run_build` MCP tool, `src/buildWrapper.ts`) | Medium |
-| FR-4 | Session snapshots as Markdown | Not implemented | Low |
+| FR-4 | Session snapshots as Markdown | **Deferred** — not needed in the current scope | Low |
 | FR-5 | Task cards with blockers and severity | **Done** (`Task` type + `src/bridge.ts` lifecycle + 9 MCP tools + webview UI) | Medium/large |
 | FR-6 | VS Code Marketplace publication | **Done** — `Efsoo.forge-relay v0.5.1` published 2026-07-12, including FR-5 | Release task |
 
-## FR-1 — Parent/Child Folder Claim Conflict Detection
+## FR-1 — Parent/Child Folder Claim Conflict Detection (Complete)
 
 ### Goal
 
@@ -66,7 +75,7 @@ parent/child overlap protection is still missing.
   case-normalization cases.
 - Ensure claimed paths cannot escape the coordinated repository.
 
-## FR-2 — Push-Based Board Updates Instead of Two-Second Polling
+## FR-2 — Push-Based Board Updates Instead of Two-Second Polling (Complete)
 
 ### Goal
 
@@ -98,7 +107,7 @@ reducing update latency and eliminating continuous two-second UI polling.
   over introducing an actual network WebSocket solely to communicate with VS
   Code webviews; update the README wording accordingly.
 
-## FR-3 — Build Hook Wrappers
+## FR-3 — Build Hook Wrappers (Complete)
 
 ### Goal
 
@@ -156,7 +165,7 @@ including active work allocation and unresolved blockers.
 - Clearly distinguish current state from historical events.
 - Add tests for empty, active, blocked, and multi-agent sessions.
 
-## FR-5 — Task Cards With Blocker State and Severity Tags
+## FR-5 — Task Cards With Blocker State and Severity Tags (Complete)
 
 ### Goal
 
@@ -193,7 +202,7 @@ claims.
 - Keep task blocker state semantically distinct from operator STOP/PAUSE.
 - Add protocol, MCP, persistence, concurrency, and webview tests.
 
-## FR-6 — VS Code Marketplace Publication
+## FR-6 — VS Code Marketplace Publication (Complete)
 
 ### Goal
 
@@ -225,7 +234,7 @@ Marketplace.
 - The published package matches the locally validated VSIX.
 - Repository documentation links to the Marketplace listing.
 
-## Recommended Implementation Order
+## Historical Implementation Order
 
 1. **FR-1:** Folder claim overlaps — closes a core collision-safety gap.
 2. **FR-2:** Push-based UI updates — contained architectural improvement.
@@ -236,11 +245,11 @@ Marketplace.
 6. **FR-6:** Marketplace publication — perform after the intended release scope
    is finalized and tested.
 
-## Review Checklist
+## Current Scope Checklist
 
 - [x] Approve or revise the scope of FR-1. (Approved 2026-07-12, implementation started.)
 - [x] Decide whether FR-2 requires network WebSockets or extension-host push. (Extension-host event subscription, no network WebSocket; implementation started 2026-07-12.)
-- [ ] Select the first build tools and integration surface for FR-3.
-- [ ] Decide snapshot trigger, location, and retention for FR-4.
-- [ ] Approve the task lifecycle and severity vocabulary for FR-5.
-- [ ] Decide which feature set must ship before FR-6.
+- [x] Select the first build tools and integration surface for FR-3. (Generic configured command via `run_build`.)
+- [ ] Decide snapshot trigger, location, and retention for FR-4. (Deferred.)
+- [x] Approve the task lifecycle and severity vocabulary for FR-5. (Released in 0.5.1.)
+- [x] Decide which feature set must ship before FR-6. (FR-1, FR-2, FR-3, and FR-5 shipped in 0.5.0/0.5.1.)
