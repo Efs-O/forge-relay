@@ -10,6 +10,68 @@ function tempRepo(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'forgerelay-bridge-test-'));
 }
 
+// ── claim path overlap detection ────────────────────────────────────────────
+
+test('claim rejects an exact path held by another agent', () => {
+    const bridge = new Bridge(tempRepo());
+    bridge.claim('claude', ['src/bridge.ts'], 60, 'held');
+
+    assert.throws(
+        () => bridge.claim('codex', ['src/bridge.ts'], 60, 'requested'),
+        /CLAIM DENIED — held by: src\/bridge\.ts \(claude\)/,
+    );
+});
+
+test('claim rejects a child when its parent is held', () => {
+    const bridge = new Bridge(tempRepo());
+    bridge.claim('claude', ['src'], 60, 'held');
+
+    assert.throws(
+        () => bridge.claim('codex', ['src/bridge.ts'], 60, 'requested'),
+        /CLAIM DENIED — held by: src \(claude\)/,
+    );
+});
+
+test('claim rejects a parent when its child is held', () => {
+    const bridge = new Bridge(tempRepo());
+    bridge.claim('claude', ['src/bridge.ts'], 60, 'held');
+
+    assert.throws(
+        () => bridge.claim('codex', ['src'], 60, 'requested'),
+        /CLAIM DENIED — held by: src\/bridge\.ts \(claude\)/,
+    );
+});
+
+test('claim allows sibling and prefix-only paths', () => {
+    const bridge = new Bridge(tempRepo());
+    bridge.claim('claude', ['src/a.ts', 'src/auth', 'app'], 60, 'held');
+
+    assert.doesNotThrow(() => bridge.claim('codex', ['src/b.ts'], 60, 'sibling'));
+    assert.doesNotThrow(() => bridge.claim('codex', ['src/authentication'], 60, 'prefix only'));
+    assert.doesNotThrow(() => bridge.claim('codex', ['apple'], 60, 'prefix only'));
+});
+
+test('claim normalises mixed separators and compares case-insensitively', () => {
+    const bridge = new Bridge(tempRepo());
+    bridge.claim('claude', ['src\\bridge.ts'], 60, 'held');
+
+    assert.throws(
+        () => bridge.claim('codex', ['src/bridge.ts'], 60, 'mixed separators'),
+        /CLAIM DENIED — held by: src\/bridge\.ts \(claude\)/,
+    );
+    assert.throws(
+        () => bridge.claim('codex', ['SRC/Bridge.ts'], 60, 'different case'),
+        /CLAIM DENIED — held by: src\/bridge\.ts \(claude\)/,
+    );
+});
+
+test('claim allows the same agent to claim overlapping paths', () => {
+    const bridge = new Bridge(tempRepo());
+    bridge.claim('claude', ['src/bridge.ts'], 60, 'child');
+
+    assert.doesNotThrow(() => bridge.claim('claude', ['src'], 60, 'parent'));
+});
+
 // ── command id prefix matching ───────────────────────────────────────────────
 
 test('resolve accepts the exact id, a unique prefix, and records the full id', () => {

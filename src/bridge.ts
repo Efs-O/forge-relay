@@ -51,7 +51,8 @@ export class Bridge {
 
             const conflicts = state.claims.flatMap(c =>
                 c.agent !== agent
-                    ? c.paths.filter(p => normalised.includes(p)).map(p => ({ path: p, agent: c.agent }))
+                    ? c.paths.filter(p => normalised.some(target => this.pathsOverlap(p, target)))
+                        .map(p => ({ path: p, agent: c.agent }))
                     : []
             );
             if (conflicts.length > 0) {
@@ -369,6 +370,13 @@ export class Bridge {
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private pathsOverlap(a: string, b: string): boolean {
+        const aSegments = a.toLowerCase().split('/');
+        const bSegments = b.toLowerCase().split('/');
+        const shorterLength = Math.min(aSegments.length, bSegments.length);
+        return aSegments.slice(0, shorterLength).every((segment, index) => segment === bSegments[index]);
+    }
 
     private ensureStore(): void {
         fs.mkdirSync(this.coordDir, { recursive: true });
