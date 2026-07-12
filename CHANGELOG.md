@@ -1,17 +1,34 @@
 # Changelog
 
+All notable changes to the Forge Relay extension.
+
 ## Unreleased
 
+## 0.5.0
+
+- File and folder claims now conflict on parent/child path overlap, not just
+  exact-path matches (e.g. claiming `src` correctly conflicts with an existing
+  claim on `src/bridge.ts`), closing a collision-safety gap. Same-agent claims
+  still never block that agent; sibling and prefix-only paths (`src/auth` vs
+  `src/authentication`) still do not conflict.
+- The board sidebar and tab panel now push state updates immediately on new
+  board events via a per-view file watcher, instead of relying solely on a
+  flat 2-second poll (a slower backstop poll remains as defense in depth).
+- Added a coordinated build tool (`run_build`): runs a locally-configured
+  build command with pre-flight board checks, claims the configured target(s),
+  posts start/result to the board, and always releases the claim on success,
+  failure, timeout, or operator STOP — configured via `forgeRelay.build.command`
+  / `.claimTargets` / `.timeoutMs` (the command itself is never a tool-call
+  argument, so it can't be redirected by a model).
+- Fixed the Forge coordinator's history trimming dropping an `assistant`
+  tool-call message while keeping its paired tool-response message, which
+  produced `role 'tool' must follow tool_calls` HTTP 400s from `forge-chat`
+  under bursty coordinator activity.
 - Centralized board tool schemas and execution across MCP HTTP, MCP stdio, and the Forge coordinator.
 - Shared the worker/coordinator completion round; coordinator history now truncates tool results to 8,000 characters and reports empty token-limit completions as errors.
 - Fixed the coordinator tools payload for strict OpenAI-compatible providers: board tool schemas are now sent as `function.parameters` instead of the MCP `inputSchema` key, which Cerebras rejected with HTTP 400.
 - Sorted the coordinator model dropdown: `@main` profile entries first, alphabetical within each profile group.
 - The coordinator dropdown now names the actual provider for cloud models (e.g. `(cerebras)`, `(OpenRouter)`) when Forge >= 0.12.28 reports the new `provider` field on `GET /models`; older Forge versions keep the generic `(provider)` tag.
-
-All notable changes to the Forge Relay extension.
-
-## 0.5.0
-
 - Added the Forge model coordinator MVP to the Connect dialog. A selected
   Forge `model@profile` reacts to board events with persistent bounded history,
   uses only board/dispatch tools, suppresses its own events, and never receives

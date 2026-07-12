@@ -15,12 +15,12 @@ and one related documentation/behavior gap around folder claims.
 
 | ID | Task | Current state | Suggested priority |
 |---|---|---|---|
-| FR-1 | Parent/child folder claim conflict detection | Exact-path conflicts only | High |
-| FR-2 | WebSocket push instead of two-second UI polling | Polling is active | Medium |
-| FR-3 | Build hook wrappers | Not implemented | Medium |
+| FR-1 | Parent/child folder claim conflict detection | **Done** (`pathsOverlap()` in `src/bridge.ts`) | High |
+| FR-2 | Push instead of two-second UI polling | **Done** (per-view `BoardWatcher` + 10s backstop) | Medium |
+| FR-3 | Build hook wrappers | **Done** (`run_build` MCP tool, `src/buildWrapper.ts`) | Medium |
 | FR-4 | Session snapshots as Markdown | Not implemented | Low |
-| FR-5 | Task cards with blockers and severity | Not implemented | Medium/large |
-| FR-6 | VS Code Marketplace publication | Not completed | Release task |
+| FR-5 | Task cards with blockers and severity | Not implemented — schema approved 2026-07-12, not yet built | Medium/large |
+| FR-6 | VS Code Marketplace publication | **Done** — `Efsoo.forge-relay v0.5.0` published 2026-07-12 | Release task |
 
 ## FR-1 — Parent/Child Folder Claim Conflict Detection
 
