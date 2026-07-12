@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
+import { BoardWatcher } from './boardWatcher';
 import { ExtensionMessage, WebviewMessage } from './types';
 import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
@@ -13,6 +14,7 @@ export class BoardPanel {
     private readonly bridge: Bridge;
     private readonly runtime: RuntimeManager;
     private pollTimer: ReturnType<typeof setInterval> | null = null;
+    private boardWatcher: BoardWatcher | null = null;
     private runtimeSub: { dispose(): void } | null = null;
     private disposables: vscode.Disposable[] = [];
 
@@ -60,20 +62,24 @@ export class BoardPanel {
 
         this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
 
-        this.startPolling();
+        this.startUpdates();
     }
 
-    private startPolling(): void {
-        const push = () => {
-            try {
-                const state = this.bridge.getState();
-                const msg: ExtensionMessage = { type: 'stateUpdate', state };
-                this.panel.webview.postMessage(msg);
-                this.panel.webview.postMessage({ type: 'sessionState', session: this.bridge.getSessionState() } satisfies ExtensionMessage);
-            } catch { /* bridge unavailable */ }
-        };
-        push();
-        this.pollTimer = setInterval(push, 2000);
+    private startUpdates(): void {
+        this.pushState();
+        this.boardWatcher = new BoardWatcher(this.bridge.getEventsPath(), () => this.pushState());
+        this.boardWatcher.start();
+        // Defensive backstop for state changes that do not append a board event.
+        this.pollTimer = setInterval(() => this.pushState(), 10_000);
+    }
+
+    private pushState(): void {
+        try {
+            const state = this.bridge.getState();
+            const msg: ExtensionMessage = { type: 'stateUpdate', state };
+            this.panel.webview.postMessage(msg);
+            this.panel.webview.postMessage({ type: 'sessionState', session: this.bridge.getSessionState() } satisfies ExtensionMessage);
+        } catch { /* bridge unavailable */ }
     }
 
     /** Push the live board state, session presence, and saved-session list. */
@@ -210,7 +216,9 @@ export class BoardPanel {
 
     dispose(): void {
         BoardPanel.current = undefined;
-        if (this.pollTimer) { clearInterval(this.pollTimer); }
+        this.boardWatcher?.stop();
+        this.boardWatcher = null;
+        if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
         this.runtimeSub?.dispose();
         this.runtimeSub = null;
         this.panel.dispose();

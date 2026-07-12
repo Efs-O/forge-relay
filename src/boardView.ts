@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
+import { BoardWatcher } from './boardWatcher';
 import { BoardState, ExtensionMessage, WebviewMessage } from './types';
 import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
@@ -9,6 +10,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 
     private view?: vscode.WebviewView;
     private pollTimer: ReturnType<typeof setInterval> | null = null;
+    private boardWatcher: BoardWatcher | null = null;
     private mcpPort = 7878;
     private runtimeSub: { dispose(): void } | null = null;
 
@@ -42,9 +44,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.onDidChangeVisibility(() => {
             if (webviewView.visible) {
-                this.startPolling();
+                this.startUpdates();
             } else {
-                this.stopPolling();
+                this.stopUpdates();
             }
         });
 
@@ -52,12 +54,13 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         this.runtimeSub = this.runtime.onChange((snapshot) => this.post({ type: 'runtimeStatus', runtime: snapshot }));
 
         webviewView.onDidDispose(() => {
-            this.stopPolling();
+            this.stopUpdates();
+            if (this.view === webviewView) { this.view = undefined; }
             this.runtimeSub?.dispose();
             this.runtimeSub = null;
         });
 
-        this.startPolling();
+        this.startUpdates();
     }
 
     updateMcpPort(port: number): void {
@@ -69,24 +72,30 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
         this.post({ type: 'autonomyState', mode });
     }
 
-    private startPolling(): void {
-        this.stopPolling();
-        const push = () => {
-            try {
-                const state = this.bridge.getState();
-                this.post({ type: 'stateUpdate', state });
-                this.post({ type: 'sessionState', session: this.bridge.getSessionState() });
-            } catch { /* bridge unavailable */ }
-        };
-        push();
-        this.pollTimer = setInterval(push, 2000);
+    private startUpdates(): void {
+        this.stopUpdates();
+        this.pushState();
+        this.boardWatcher = new BoardWatcher(this.bridge.getEventsPath(), () => this.pushState());
+        this.boardWatcher.start();
+        // Defensive backstop for state changes that do not append a board event.
+        this.pollTimer = setInterval(() => this.pushState(), 10_000);
     }
 
-    private stopPolling(): void {
+    private stopUpdates(): void {
+        this.boardWatcher?.stop();
+        this.boardWatcher = null;
         if (this.pollTimer) {
             clearInterval(this.pollTimer);
             this.pollTimer = null;
         }
+    }
+
+    private pushState(): void {
+        try {
+            const state = this.bridge.getState();
+            this.post({ type: 'stateUpdate', state });
+            this.post({ type: 'sessionState', session: this.bridge.getSessionState() });
+        } catch { /* bridge unavailable */ }
     }
 
     private post(msg: ExtensionMessage): void {

@@ -252,7 +252,13 @@ export class ForgeCoordinatorBridge {
 
     private trimHistory(): void {
         const limit = this.opts.historyLimit ?? 40;
-        if (this.history.length > limit) this.history = [this.history[0], ...this.history.slice(-(limit - 1))];
+        if (this.history.length <= limit) return;
+        const kept = this.history.slice(-(limit - 1));
+        // A positional cut can land between an assistant tool_calls message and its
+        // paired tool-response message(s); an orphaned leading 'tool' message makes
+        // the next completion request invalid ("role 'tool' must follow tool_calls").
+        while (kept.length && kept[0].role === 'tool') kept.shift();
+        this.history = [this.history[0], ...kept];
     }
 
     private systemPrompt(): string {

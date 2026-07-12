@@ -398,7 +398,7 @@ Maintained by [Efs-O](https://github.com/Efs-O) — amandoulou@yahoo.gr
 
 ## Roadmap
 
-- [ ] WebSocket push instead of 2s polling
+- [x] Push board updates to webviews from intra-process board events (with a slow polling backstop)
 - [ ] Folder-level claim conflict detection (parent/child path overlap)
 - [ ] Build hook wrappers (auto-claim before `dotnet build`, auto-post result)
 - [ ] Session snapshots - periodic markdown export of current split and open blockers
