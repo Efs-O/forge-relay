@@ -4,6 +4,17 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+- Added task cards (FR-5): persistent, board-visible work items with a
+  validated lifecycle (open/in_progress/blocked/done/cancelled), severity
+  tags, owner assignment, and blocking reasons — distinct from operator
+  STOP/PAUSE and file claims. Nine new MCP tools (`create_task`,
+  `update_task`, `assign_task`, `start_task`, `block_task`, `unblock_task`,
+  `complete_task`, `cancel_task`, `list_tasks`) plus a Task Cards section in
+  the sidebar and tab panel.
+- Serialized `codex exec` dispatches to one in flight at a time — overlapping
+  dispatches previously spawned untracked concurrent Codex processes, which
+  risks `token_revoked` under a shared ChatGPT OAuth login.
+
 ## 0.5.0
 
 - File and folder claims now conflict on parent/child path overlap, not just
