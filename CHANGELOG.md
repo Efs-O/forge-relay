@@ -4,6 +4,8 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.5.1
+
 - Added task cards (FR-5): persistent, board-visible work items with a
   validated lifecycle (open/in_progress/blocked/done/cancelled), severity
   tags, owner assignment, and blocking reasons — distinct from operator

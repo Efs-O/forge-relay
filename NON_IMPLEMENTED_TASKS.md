@@ -20,7 +20,7 @@ and one related documentation/behavior gap around folder claims.
 | FR-3 | Build hook wrappers | **Done** (`run_build` MCP tool, `src/buildWrapper.ts`) | Medium |
 | FR-4 | Session snapshots as Markdown | Not implemented | Low |
 | FR-5 | Task cards with blockers and severity | **Done** (`Task` type + `src/bridge.ts` lifecycle + 9 MCP tools + webview UI) | Medium/large |
-| FR-6 | VS Code Marketplace publication | `Efsoo.forge-relay v0.5.0` published 2026-07-12; FR-5 landed after that publish and is not yet in a released version | Release task |
+| FR-6 | VS Code Marketplace publication | Preparing `Efsoo.forge-relay v0.5.1`, which includes FR-5 | Release task |
 
 ## FR-1 — Parent/Child Folder Claim Conflict Detection
 
