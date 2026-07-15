@@ -5,7 +5,8 @@ import {
     SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote, beginWorkerRun, endWorkerRun, formatWorkerPost,
     decideForgeRoute, fetchForgeCatalog, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
-import { forgeHolds, forgeSlots, Semaphore } from './forgeHold';
+import { forgeHolds, forgeSlots } from './forgeHold';
+import { acquireCodexProcessSlot } from './codexExecutionGate';
 import { ensureOllamaDaemon } from './daemonSupervisor';
 import {
     isCodexModel, codexModelOverride, codexDefaultModel, buildCodexPrompt, probeCodexCli, runCodexExec,
@@ -45,11 +46,9 @@ const MAX_STEPS_DEFAULT = 12;
  * `codex exec` dispatches were each getting their own untracked process with no
  * queue — a real risk given a second concurrent `codex exec` under the same
  * ChatGPT OAuth login can trip `token_revoked` and kill both sessions. This caps
- * Codex dispatches to one in flight at a time; extra dispatches queue instead of
- * racing. To revert: delete this Semaphore, the `codexSlot.acquire()` /
- * `releaseSlot()` calls in `runCodex` below, and the `Semaphore` import above.
+ * Codex dispatches to one in flight at a time; extra dispatches wait instead of
+ * racing. The same lane is held for the lifetime of managed Codex mode.
  */
-const codexSlot = new Semaphore(1);
 
 /**
  * Worker system prompt. Contract: this must ALWAYS return a non-empty string —
@@ -223,7 +222,7 @@ export async function handleDispatchSubagent(
 
         const runCodex = async (mentionDispatcher: boolean): Promise<string> => {
             const wake = mentionDispatcher ? `${dispatcher}: ` : '';
-            const releaseSlot = await codexSlot.acquire();
+            const releaseSlot = await acquireCodexProcessSlot();
             try {
                 const res = await runCodexExec({
                     executable: backends.codexExecutable,

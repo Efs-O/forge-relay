@@ -103,15 +103,19 @@ export interface SessionRoster {
 }
 
 // Mode A = interactive /loop paste (the user's own Claude chat); Mode B = headless
-// SDK bridge (P4). Codex participates via its own MCP session — Relay never
-// spawns a Codex process (two app-servers on one ChatGPT login trip token_revoked).
+// SDK bridge (P4). Codex defaults to the user's MCP session; the experimental
+// managed-exclusive mode is guarded against concurrent app-server ownership.
 export type ClaudeMode = 'A' | 'B';
+export type CodexMode = 'mcp' | 'managed-exclusive';
 
 export interface RuntimeStatusSnapshot {
     claude: { status: RuntimeBridgeStatus; detail: string };
+    codex: { status: RuntimeBridgeStatus; detail: string; threadId?: string };
     forgeCoordinator: { status: RuntimeBridgeStatus; detail: string; model: string };
     roster: SessionRoster;
     claudeMode: ClaudeMode;
+    codexMode: CodexMode;
+    managedCodexAvailable: boolean;
 }
 
 // Messages sent from extension → webview
@@ -140,7 +144,7 @@ export type WebviewMessage =
     | { type: 'newSession'; agent: string; label?: string }
     | { type: 'listSessions' }
     | { type: 'loadSession'; id: string }
-    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode; forgeCoordinatorModel?: string }
+    | { type: 'connectSession'; agent: string; roster: SessionRoster; claudeMode: ClaudeMode; codexMode?: CodexMode; forgeCoordinatorModel?: string }
     | { type: 'disconnectSession'; agent: string }
     | { type: 'toggleAutonomy' }
     | { type: 'createTask'; agent: string; title: string; description?: string; severity?: TaskSeverity; owner?: string }

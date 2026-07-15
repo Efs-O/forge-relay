@@ -1,10 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { AgentRuntimeBridge, ScriptRuntimeBridge, RuntimeStatus } from './runtimeBridge';
-import { ClaudeMode, SessionRoster } from './types';
+import { ClaudeMode, CodexMode, SessionRoster } from './types';
 import { Bridge } from './bridge';
 import { SubagentBackends } from './subagent';
 import { ForgeCoordinatorBridge } from './forgeCoordinatorBridge';
+import { CodexManagedBridge, CodexAppServerAdapter } from './codexManagedBridge';
+import { CodexAppServerClient, CodexRpcNotification, CodexServerRequest } from './codexAppServerClient';
+import { CodexRuntimeLease } from './codexRuntimeLease';
+import { probeCodexAppServers } from './codexProcessProbe';
+import { resolveCodexExecutable } from './codexExecutable';
+import { acquireCodexProcessSlot } from './codexExecutionGate';
 
 export interface RuntimeAgentSnapshot {
     status: RuntimeStatus;
@@ -13,9 +19,12 @@ export interface RuntimeAgentSnapshot {
 
 export interface RuntimeSnapshot {
     claude: RuntimeAgentSnapshot;
+    codex: RuntimeAgentSnapshot & { threadId?: string };
     forgeCoordinator: RuntimeAgentSnapshot & { model: string };
     roster: SessionRoster;
     claudeMode: ClaudeMode;
+    codexMode: CodexMode;
+    managedCodexAvailable: boolean;
 }
 
 export interface RuntimeManagerOptions {
@@ -58,6 +67,12 @@ export interface RuntimeManagerOptions {
      * gets the forgerelay tools but no Forge catalog.
      */
     subagentEnv?: Record<string, string>;
+    /** Opt-in feature gate. MCP-only remains the default and fallback. */
+    experimentalManagedCodex?: boolean;
+    codexExecutable?: string;
+    effectiveCodexHome?: string;
+    codexManagedModel?: string;
+    codexManagedTurnTimeoutMs?: number;
     onLog?: (line: string) => void;
     onDuplicateSuppressed?: (ownerPid: number, ownerRepoRoot: string) => void;
 }
@@ -69,19 +84,22 @@ export interface RuntimeManagerOptions {
  *  - Claude Mode A: the user's own interactive /loop session — no managed
  *    process, so the Claude bridge stays inactive.
  *  - Claude Mode B: supervised headless Claude Agent SDK bridge (P4).
- *  - Codex: NEVER spawned by Relay. Two codex app-servers on one ChatGPT OAuth
- *    login trip token_revoked server-side and kill both sessions, so Codex only
- *    participates via the forgerelay MCP entry in its own ~/.codex/config.toml.
+ *  - Codex MCP mode: the user's own interactive session (the safe default).
+ *  - Codex managed-exclusive mode: an opt-in app-server session guarded by a
+ *    credential-home lease, an external-process probe, and a shared exec gate.
  */
 export class RuntimeManager {
     private readonly claude: ScriptRuntimeBridge;
     private readonly forgeCoordinator: ForgeCoordinatorBridge | null;
+    private readonly codexManaged: CodexManagedBridge | null;
     private forgeStatus: RuntimeAgentSnapshot = { status: 'inactive', detail: 'Not connected.' };
     private readonly listeners = new Set<(snapshot: RuntimeSnapshot) => void>();
     private roster: SessionRoster = { claude: false, codex: false };
     // Default matches the session-start modal's pre-checked option (Mode B,
     // the zero-paste headless bridge). Inert until a roster selects Claude.
     private claudeMode: ClaudeMode = 'B';
+    private codexMode: CodexMode = 'mcp';
+    private codexGateRelease: (() => void) | null = null;
     /** Absolute path to this extension build's out/mcpStdio.js (resolved from
      *  context.extensionUri at activation, so it always points at the *current*
      *  install — this is what makes the Mode A config self-healing). */
@@ -103,6 +121,89 @@ export class RuntimeManager {
             extensionVersion: opts.extensionVersion, onLog: opts.onLog,
             onStatus: (status, detail) => { this.forgeStatus = { status, detail }; this.emit(); },
         }) : null;
+
+        if (opts.experimentalManagedCodex) {
+            const effectiveHome = opts.effectiveCodexHome?.trim();
+            if (!effectiveHome) throw new Error('Managed Codex requires an effective CODEX_HOME.');
+            const lease = new CodexRuntimeLease(effectiveHome, opts.repoRoot, process.pid, opts.extensionVersion);
+            const nodeExecutable = opts.nodePath?.trim() || 'node';
+            const mcpEnv = { ...(opts.subagentEnv ?? {}) };
+            const appServerEnv = { ...process.env, CODEX_HOME: effectiveHome };
+            const createAdapter = (handlers: {
+                handleServerRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+            }): CodexAppServerAdapter => {
+                const launch = resolveCodexExecutable({
+                    configuredExecutable: opts.codexExecutable,
+                    nodeExecutable,
+                });
+                const notificationListeners = new Set<(notification: { method: string; params?: unknown }) => void>();
+                const closeListeners = new Set<(error?: Error) => void>();
+                let closeNotified = false;
+                const notifyClose = (error?: Error): void => {
+                    if (closeNotified) return;
+                    closeNotified = true;
+                    for (const listener of closeListeners) listener(error);
+                };
+                const client = new CodexAppServerClient({
+                    executable: launch.executable,
+                    executableArgsPrefix: launch.argsPrefix,
+                    shell: false,
+                    cwd: opts.repoRoot,
+                    env: appServerEnv,
+                    requestTimeoutMs: 30_000,
+                    configOverrides: {
+                        'mcp_servers.forgerelay': {
+                            command: nodeExecutable,
+                            args: [opts.mcpStdioPath, '--repoRoot', opts.repoRoot],
+                            env: mcpEnv,
+                            required: true,
+                        },
+                    },
+                    handleServerRequest: async (request: CodexServerRequest) => {
+                        return handlers.handleServerRequest(request.method, (request.params ?? {}) as Record<string, unknown>);
+                    },
+                    onNotification: (notification: CodexRpcNotification) => {
+                        for (const listener of notificationListeners) listener(notification);
+                    },
+                    onProtocolError: notifyClose,
+                    onExit: exit => notifyClose(exit.code === 0 ? undefined :
+                        new Error(`Codex app-server exited (${exit.signal ?? `code ${exit.code}`}).`)),
+                    onStderr: text => opts.onLog?.(`[codex] ${text.trimEnd()}`),
+                });
+                return {
+                    start: () => client.start(),
+                    request: <T = unknown>(method: string, params?: unknown) => client.request<T>(method, params),
+                    notify: (method, params) => client.notify(method, params),
+                    close: () => client.close(),
+                    get childPid() { return client.pid; },
+                    onNotification: listener => { notificationListeners.add(listener); return () => notificationListeners.delete(listener); },
+                    onClose: listener => { closeListeners.add(listener); return () => closeListeners.delete(listener); },
+                };
+            };
+            this.codexManaged = new CodexManagedBridge({
+                board: opts.bridge,
+                eventsPath: opts.eventsPath,
+                repoRoot: opts.repoRoot,
+                clientFactory: createAdapter,
+                lease,
+                processProbe: () => {
+                    const result = probeCodexAppServers();
+                    return { status: result.status === 'blocked' ? 'external' : result.status, detail: result.detail };
+                },
+                model: opts.codexManagedModel,
+                turnTimeoutMs: opts.codexManagedTurnTimeoutMs,
+                onLog: opts.onLog,
+                onStatus: (status) => {
+                    if ((status === 'stopped' || status === 'inactive') && this.codexGateRelease) {
+                        this.codexGateRelease();
+                        this.codexGateRelease = null;
+                    }
+                    this.emit();
+                },
+            });
+        } else {
+            this.codexManaged = null;
+        }
 
         // Attach the Forge Relay MCP server. Mode defaults to the orchestrator
         // policy (react to the operator + @mentions, not peer chatter).
@@ -142,9 +243,16 @@ export class RuntimeManager {
     getSnapshot(): RuntimeSnapshot {
         return {
             claude: { status: this.claude.status(), detail: this.claude.detailText() },
+            codex: {
+                status: this.codexManaged?.status() ?? 'inactive',
+                detail: this.codexManaged?.detailText() ?? 'MCP-only mode; Relay does not own this Codex process.',
+                threadId: this.codexManaged?.activeThreadId(),
+            },
             forgeCoordinator: { ...this.forgeStatus, model: this.forgeCoordinator?.selectedModel() ?? '' },
             roster: { ...this.roster },
             claudeMode: this.claudeMode,
+            codexMode: this.codexMode,
+            managedCodexAvailable: this.codexManaged !== null,
         };
     }
 
@@ -166,12 +274,13 @@ export class RuntimeManager {
     /**
      * Apply the orchestrator selection chosen at Connect (plan §2.4). The Claude
      * headless bridge runs only for selected + Mode B; Mode A is the user's own
-     * /loop paste (no managed process). roster.codex is informational only —
-     * Codex joins via its own MCP session, never a Relay-spawned process.
+     * /loop paste (no managed process). Codex is MCP-only unless the explicit,
+     * feature-gated managed-exclusive mode was selected.
      */
-    async setRoster(roster: SessionRoster, claudeMode: ClaudeMode, forgeModel?: string): Promise<void> {
+    async setRoster(roster: SessionRoster, claudeMode: ClaudeMode, forgeModel?: string, codexMode: CodexMode = 'mcp'): Promise<void> {
         this.roster = { ...roster };
         this.claudeMode = claudeMode;
+        this.codexMode = codexMode;
 
         if (forgeModel) {
             this.claude.stop();
@@ -194,6 +303,29 @@ export class RuntimeManager {
         // extension upgrade auto-repairs the (otherwise version-stale) entry.
         if (roster.claude && claudeMode === 'A') {
             this.ensureClaudeMcpConfig();
+        }
+
+        const wantsManagedCodex = roster.codex && codexMode === 'managed-exclusive';
+        if (wantsManagedCodex) {
+            if (!this.codexManaged) {
+                throw new Error('Managed Codex is disabled. Enable forgeRelay.experimentalManagedCodex or use MCP-only mode.');
+            }
+            const status = this.codexManaged.status();
+            if (status === 'stopped') await this.codexManaged.stop();
+            if (status === 'inactive' || status === 'stopped') {
+                this.codexGateRelease = await acquireCodexProcessSlot();
+                try {
+                    await this.codexManaged.start();
+                } catch (error) {
+                    await this.codexManaged.stop();
+                    this.codexGateRelease?.();
+                    this.codexGateRelease = null;
+                    throw error;
+                }
+            }
+        } else {
+            const managed = this.codexManaged;
+            if (managed && managed.status() !== 'inactive') await managed.stop();
         }
 
         this.emit();
@@ -252,12 +384,16 @@ export class RuntimeManager {
 
     /** Whether any managed runtime is currently active (or trying to be). */
     isAnyActive(): boolean {
-        return this.claude.status() !== 'inactive' || this.forgeStatus.status !== 'inactive';
+        return this.claude.status() !== 'inactive' || this.forgeStatus.status !== 'inactive'
+            || (this.codexManaged?.status() ?? 'inactive') !== 'inactive';
     }
 
     async stopAll(): Promise<void> {
         this.roster = { claude: false, codex: false, forgeCoordinator: false };
         this.claude.stop();
+        await this.codexManaged?.stop();
+        this.codexGateRelease?.();
+        this.codexGateRelease = null;
         await this.forgeCoordinator?.stop();
     }
 

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ClaudeMode, SessionRoster } from './types';
+import { ClaudeMode, CodexMode, SessionRoster } from './types';
 
 export function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -7,13 +7,15 @@ export function getNonce(): string {
 }
 
 /** Human-readable notice describing what Connect just started, given the roster. */
-export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode): string {
+export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode, codexMode: CodexMode = 'mcp'): string {
     if (!roster.claude && !roster.codex && !roster.forgeCoordinator) {
         return 'No orchestrator selected - session posted but no agent will react.';
     }
     const parts: string[] = [];
     if (roster.codex) {
-        parts.push('Codex expected through its own MCP session');
+        parts.push(codexMode === 'managed-exclusive'
+            ? 'managed Codex starting in exclusive mode'
+            : 'Codex expected through its own MCP session');
     }
     if (roster.forgeCoordinator) parts.push('Forge model coordinator starting');
     if (roster.claude) {
@@ -222,20 +224,27 @@ export function getWebviewHtml(
             <div class="roster-block">
                 <h3>Orchestrators</h3>
                 <label class="check-row"><input type="checkbox" id="roster-claude" checked> Claude</label>
-                <label class="check-row"><input type="checkbox" id="roster-codex"> Codex via its own MCP session</label>
+                <label class="check-row"><input type="checkbox" id="roster-codex"> Codex</label>
                 <label class="check-row"><input type="checkbox" id="roster-forge"> Forge model coordinator</label>
                 <div class="control-row hidden" id="forge-model-block">
                     <label for="forge-model">Forge model</label>
                     <select id="forge-model"><option value="">Loading Forge models...</option></select>
                     <p id="forge-model-error" class="prompt-note"></p>
                 </div>
-                <p class="prompt-note modal-note">Normal Codex usage does not need Forge Relay to launch a second app-server. Select Codex here when your existing Codex session should participate on the board through the <code>forgerelay</code> MCP tools.</p>
+                <p class="prompt-note modal-note">Use your existing Codex session normally. Experimental managed mode is exclusive and refuses to start while another Codex app-server is detected.</p>
             </div>
 
             <div class="mode-block" id="claude-mode-block">
                 <h3>Claude mode</h3>
                 <label class="check-row"><input type="radio" name="claude-mode" value="B" checked> Run Claude in the background — zero paste, uses your Claude Code login (recommended)</label>
                 <label class="check-row"><input type="radio" name="claude-mode" value="A"> Drive Claude from your own chat — paste <code>/loop</code>, you approve every action</label>
+            </div>
+
+            <div class="mode-block hidden" id="codex-mode-block">
+                <h3>Codex mode</h3>
+                <label class="check-row"><input type="radio" name="codex-mode" value="mcp" checked> Use my existing Codex session (recommended)</label>
+                <label class="check-row hidden" id="codex-managed-option"><input type="radio" name="codex-mode" value="managed-exclusive"> Run managed Codex exclusively (experimental)</label>
+                <p id="codex-managed-warning" class="prompt-note hidden">Close Codex IDE/desktop sessions first. Forge Relay performs a conservative process check and will fail closed if exclusivity cannot be established.</p>
             </div>
 
             <div class="prompt-block" id="claude-prompt-block">
@@ -250,7 +259,7 @@ export function getWebviewHtml(
                 <div class="prompt-head">
                     <h3>Codex path</h3>
                 </div>
-                <p class="prompt-note">Codex joins through its own session with the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Forge Relay never launches a Codex process: a second <code>codex app-server</code> on the same ChatGPT login gets its OAuth token revoked and kills both sessions.</p>
+                <p class="prompt-note" id="codex-path-note">Codex joins through its own session with the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Managed mode is opt-in, experimental, and exclusive because concurrent app-servers sharing authentication/state are not guaranteed safe.</p>
             </div>
 
             <div class="modal-actions">

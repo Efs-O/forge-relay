@@ -178,14 +178,15 @@ export class BoardPanel {
                     this.bridge.cancelTask(msg.agent, msg.taskId, msg.note);
                     break;
                 case 'connectSession':
-                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel);
+                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, msg.codexMode ?? 'mcp');
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
+                        codexMode: msg.codexMode ?? 'mcp',
                     });
                     this.panel.webview.postMessage({
                         type: 'notice',
-                        message: sessionStartNotice(msg.roster, msg.claudeMode),
+                        message: sessionStartNotice(msg.roster, msg.claudeMode, msg.codexMode ?? 'mcp'),
                     } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'stateUpdate', state: this.bridge.getState() } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'sessionState', session: this.bridge.getSessionState() } satisfies ExtensionMessage);

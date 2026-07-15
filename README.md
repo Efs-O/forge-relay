@@ -160,26 +160,32 @@ Add or merge this into the Claude settings file you want to use:
 
 If Claude stops launching after a workspace-level config change, rename workspace `.claude/settings.json` first, then `.claude/settings.local.json` if needed. Prefer renaming over deleting so rollback is immediate.
 
-### Codex as an orchestrator: MCP-only, by design
+### Codex as an orchestrator
 
 Codex participates on the board through the `forgerelay` MCP entry in its own
-`~/.codex/config.toml` (see the setup snippet above). Forge Relay **never
-launches a long-lived Codex process**.
+`~/.codex/config.toml` (see the setup snippet above). This **MCP-only mode is the
+default** and Forge Relay does not own the Codex process.
 
-Why: a headless `codex app-server` spawned by Relay would be a *second*
-persistent Codex process on the same ChatGPT OAuth login as your sidebar/IDE
-Codex session. OpenAI's auth treats that as token reuse
-(`refresh_token_reused` / `token_revoked`) and kills **both** sessions
-server-side. There is no Relay-side fix; running a headless Codex orchestrator
-would require separate API-key credentials. The earlier managed Codex bridge
-(`scripts/codex-auto-bridge.js`) was removed for this reason — it survives in
-git history if API-key-based revival is ever wanted.
+An experimental **managed-exclusive** mode is available behind
+`forgeRelay.experimentalManagedCodex`. It uses the current Codex app-server
+protocol, one persistent thread, a machine-local lease keyed to the effective
+`CODEX_HOME`, and a fail-closed process probe. It refuses to start when another
+Codex app-server is detected or process ownership cannot be established. Select
+the managed option explicitly in Connect; use `forgeRelay.codexManagedHome` for
+a separately authenticated Codex home when desired.
+
+Exclusive means exclusive: this does not claim that two app-servers sharing one
+ChatGPT login are safe. Historical Codex versions produced
+`refresh_token_reused` / `token_revoked` failures in that topology. Close other
+Codex app-server sessions before managed mode, or stay in MCP-only mode. The
+probe is conservative best-effort OS inspection, not an OpenAI API guarantee.
 
 The **Codex worker backend** is different: each `dispatch_subagent` with model
 `"codex"` runs one short-lived `codex exec` work order that exits when the task
-finishes. Short sequential exec runs coexist with an interactive Codex session
-in practice; if you ever hit token-rotation errors, run codex workers while the
-interactive Codex sidebar is closed, or use API-key billing for the CLI.
+finishes. Relay serializes those workers, and managed-exclusive mode holds the
+same process slot for its lifetime, so Relay never starts its own worker beside
+its managed app-server. If you hit token-rotation errors, close other Codex
+sessions or use an isolated credential home.
 
 Codex log noise such as `codex_apps` / `chatgpt.com/backend-api/wham/apps`
 timeouts comes from Codex's own ChatGPT connectors/apps feature, not Forge

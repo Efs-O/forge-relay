@@ -1,6 +1,14 @@
 # Forge Relay — Current Status
 
-Last refreshed: 2026-07-13
+Last refreshed: 2026-07-15
+
+## In development
+
+The `feat/managed-codex-relay` branch adds an opt-in managed-exclusive Codex
+coordinator. MCP-only remains the default. Managed startup is guarded by a
+credential-home lease, external app-server process probe, and the same serialized
+process slot used by Codex workers. This is an exclusivity design, not a guarantee
+that concurrent app-servers sharing one ChatGPT login are supported.
 
 ## Released
 

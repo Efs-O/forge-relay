@@ -207,6 +207,26 @@
           "default": 900000,
           "description": "Wall-clock cap (ms) for one codex exec worker run dispatched via dispatch_subagent; the process is killed past it. Default 15 minutes."
         },
+        "forgeRelay.experimentalManagedCodex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental: allow Forge Relay to start one exclusive managed Codex app-server. Off by default; startup fails closed when another Codex app-server is detected."
+        },
+        "forgeRelay.codexManagedHome": {
+          "type": "string",
+          "default": "",
+          "description": "Optional dedicated CODEX_HOME for experimental managed Codex. Forge Relay never copies or reads credentials; authenticate this home separately before use."
+        },
+        "forgeRelay.codexManagedModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model override for experimental managed Codex. Empty uses the Codex CLI default."
+        },
+        "forgeRelay.codexManagedTurnTimeoutMs": {
+          "type": "number",
+          "default": 900000,
+          "description": "Wall-clock cap (ms) for one managed Codex board-event turn. On timeout Forge Relay interrupts the turn before considering a restart."
+        },
         "forgeRelay.ollamaExecutable": {
           "type": "string",
           "default": "",
