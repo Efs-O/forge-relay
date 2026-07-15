@@ -11,9 +11,10 @@ import { BoardWatcher } from './boardWatcher';
 import { RuntimeManager } from './runtimeManager';
 import { subagentEnvFromBackends } from './subagent';
 import { RuntimeStatus } from './runtimeBridge';
-import { BoardEvent, ClaudeMode, SessionRoster } from './types';
+import { BoardEvent, ClaudeMode, CodexMode, SessionRoster } from './types';
 import { isVsCodeInstallDir } from './vscodeInstallDir';
 import { resolveForgeControlUrl } from './forgeControlDiscovery';
+import { probeCodexAppServers } from './codexProcessProbe';
 
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
@@ -93,8 +94,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // the stdio server all agree on a single coordination dir.
     const eventsPath = bridge.getEventsPath();
 
-    // Supervised Claude runtime bridge (Mode B). The status bar item reflects
-    // its status; Codex is never spawned by Relay (see RuntimeManager docs).
+    // Supervised runtime bridges. Codex remains MCP-only unless its experimental
+    // managed-exclusive mode is both enabled and explicitly selected.
     const runtimeStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     runtimeStatusBar.command = 'forgeRelay.openBoard';
 
@@ -113,6 +114,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         claudeModel: config.get<string>('claudeModel', '').trim() || undefined,
         claudeKeepAliveMs: config.get<number>('claudeKeepAliveMs', 0),
         claudeKeepAliveMaxPings: config.get<number>('claudeKeepAliveMaxPings', 3),
+        experimentalManagedCodex: config.get<boolean>('experimentalManagedCodex', false),
+        codexExecutable: subagentBackends.codexExecutable,
+        effectiveCodexHome: config.get<string>('codexManagedHome', '').trim()
+            || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+        codexManagedModel: config.get<string>('codexManagedModel', '').trim() || undefined,
+        codexManagedTurnTimeoutMs: config.get<number>('codexManagedTurnTimeoutMs', 900_000),
         subagentEnv: subagentEnvFromBackends(subagentBackends),
         onLog: (line) => { log(`[bridge] ${line}`); console.log('[forgerelay:bridge]', line); },
         onDuplicateSuppressed: (ownerPid, ownerRepoRoot) => {
@@ -123,8 +130,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const renderStatusBar = (): void => {
         const snap = rm.getSnapshot();
-        runtimeStatusBar.text = `$(${statusBarIcon(snap.claude.status)}) Forge Relay: Claude ${snap.claude.status}`;
-        runtimeStatusBar.tooltip = `Claude bridge - ${snap.claude.detail}\nClick to open the board.`;
+        const managedCodex = snap.codexMode === 'managed-exclusive' && snap.roster.codex;
+        const primaryStatus = managedCodex ? snap.codex.status : snap.claude.status;
+        runtimeStatusBar.text = `$(${statusBarIcon(primaryStatus)}) Forge Relay: `
+            + (managedCodex ? `Codex ${snap.codex.status}` : `Claude ${snap.claude.status}`);
+        runtimeStatusBar.tooltip = `Claude bridge - ${snap.claude.detail}\nCodex - ${snap.codex.detail}\nClick to open the board.`;
         runtimeStatusBar.show();
     };
     rm.onChange((snapshot) => {
@@ -133,6 +143,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void context.workspaceState.update(ROSTER_KEY, {
             roster: snapshot.roster,
             claudeMode: snapshot.claudeMode,
+            codexMode: snapshot.codexMode,
             forgeCoordinatorModel: snapshot.forgeCoordinator.model,
         });
     });
@@ -147,9 +158,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Restore the previous session roster so selected bridges auto-reconnect
     // after a window reload (survives restart, per P2/P3).
-    const savedSession = context.workspaceState.get<{ roster: SessionRoster; claudeMode: ClaudeMode; forgeCoordinatorModel?: string }>(ROSTER_KEY);
+    const savedSession = context.workspaceState.get<{
+        roster: SessionRoster;
+        claudeMode: ClaudeMode;
+        codexMode?: CodexMode;
+        forgeCoordinatorModel?: string;
+    }>(ROSTER_KEY);
     if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex || savedSession.roster.forgeCoordinator)) {
-        await rm.setRoster({ ...savedSession.roster }, savedSession.claudeMode ?? 'A', savedSession.forgeCoordinatorModel);
+        try {
+            await rm.setRoster(
+                { ...savedSession.roster },
+                savedSession.claudeMode ?? 'A',
+                savedSession.forgeCoordinatorModel,
+                savedSession.codexMode ?? 'mcp',
+            );
+        } catch (error) {
+            log(`[bridge] saved session restore failed: ${error instanceof Error ? error.message : String(error)}`);
+            vscode.window.showWarningMessage(
+                `Forge Relay: could not restore the managed session. ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
     }
 
     context.subscriptions.push(
@@ -186,7 +214,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
 
         vscode.commands.registerCommand('forgeRelay.verifySetup', async () => {
-            const report = buildVerifySetupReport(context.extensionUri.fsPath, repoRoot, mcpServer?.getPort() ?? port);
+            const managedEnabled = config.get<boolean>('experimentalManagedCodex', false);
+            const report = buildVerifySetupReport(
+                context.extensionUri.fsPath,
+                repoRoot,
+                mcpServer?.getPort() ?? port,
+                {
+                    enabled: managedEnabled,
+                    home: config.get<string>('codexManagedHome', '').trim()
+                        || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+                    probe: managedEnabled ? probeCodexAppServers() : undefined,
+                },
+            );
             const doc = await vscode.workspace.openTextDocument({ content: report, language: 'markdown' });
             await vscode.window.showTextDocument(doc);
         }),
@@ -424,7 +463,12 @@ function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number
     ].join('\n');
 }
 
-function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort: number): string {
+function buildVerifySetupReport(
+    extensionPath: string,
+    repoRoot: string,
+    mcpPort: number,
+    managed?: { enabled: boolean; home: string; probe?: ReturnType<typeof probeCodexAppServers> },
+): string {
     const stdioPath = getStdioPath(extensionPath);
     const codexConfigPath = getCodexConfigPath();
     const claudePaths = getClaudeConfigPaths(repoRoot);
@@ -452,6 +496,11 @@ function buildVerifySetupReport(extensionPath: string, repoRoot: string, mcpPort
         formatCheck('Codex config has `forgerelay` entry', codexConfig.hasEntry, describeInspection(codexConfig)),
         formatCheck('Codex config does not hardwire a global `--repoRoot`', !codexHardwiredRepoRoot.hasEntry, describeInspection(codexHardwiredRepoRoot)),
         formatCheck('At least one checked Claude settings file has `forgerelay` entry', anyClaudeConfigured, summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])),
+        ...(managed?.enabled && managed.probe ? [
+            formatCheck('Managed Codex exclusive-process preflight', managed.probe.status === 'clear', managed.probe.detail),
+        ] : []),
+        `- Managed Codex feature: ${managed?.enabled ? 'enabled (experimental)' : 'disabled; MCP-only is the default'}.`,
+        ...(managed?.enabled ? [`- Effective managed CODEX_HOME: \`${toForwardSlashes(managed.home)}\`.`] : []),
         '',
         '## Claude file inspection',
         '',

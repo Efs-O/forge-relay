@@ -194,14 +194,15 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                 case 'connectSession': {
                     // P3: apply the chosen roster. Only selected agents participate
                     // in the session; Codex joins via its own MCP session.
-                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel);
+                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, msg.codexMode ?? 'mcp');
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
+                        codexMode: msg.codexMode ?? 'mcp',
                     });
                     this.post({
                         type: 'notice',
-                        message: sessionStartNotice(msg.roster, msg.claudeMode),
+                        message: sessionStartNotice(msg.roster, msg.claudeMode, msg.codexMode ?? 'mcp'),
                     });
                     this.post({ type: 'stateUpdate', state: this.bridge.getState() });
                     this.post({ type: 'sessionState', session: this.bridge.getSessionState() });

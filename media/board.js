@@ -34,6 +34,9 @@ const forgeModel = /** @type {HTMLSelectElement} */ (document.getElementById('fo
 const forgeModelError = /** @type {HTMLElement} */ (document.getElementById('forge-model-error'));
 const claudePromptBlock = /** @type {HTMLElement} */ (document.getElementById('claude-prompt-block'));
 const claudeModeBlock = /** @type {HTMLElement} */ (document.getElementById('claude-mode-block'));
+const codexModeBlock = /** @type {HTMLElement} */ (document.getElementById('codex-mode-block'));
+const codexManagedOption = /** @type {HTMLElement} */ (document.getElementById('codex-managed-option'));
+const codexManagedWarning = /** @type {HTMLElement} */ (document.getElementById('codex-managed-warning'));
 const codexInfoBlock = /** @type {HTMLElement} */ (document.getElementById('codex-info-block'));
 
 /** @type {any[]}*/
@@ -48,8 +51,13 @@ let currentSessionState = null;
 let shouldAutoScroll = true;
 /** @type {{ status: string, detail: string }} */
 let claudeRuntime = { status: 'inactive', detail: 'Not connected.' };
+/** @type {{ status: string, detail: string }} */
+let codexRuntime = { status: 'inactive', detail: 'Not connected.' };
 /** @type {'A'|'B'} */
 let currentClaudeMode = 'B';
+/** @type {'mcp'|'managed-exclusive'} */
+let currentCodexMode = 'mcp';
+let managedCodexAvailable = false;
 /** @type {{ claude: any, codex: any }} */
 let lastPresence = { claude: null, codex: null };
 /** @type {{ claude: boolean, codex: boolean } | null} */
@@ -98,8 +106,12 @@ window.addEventListener('message', (/** @type {MessageEvent} */ event) => {
     }
     if (msg.type === 'runtimeStatus') {
         claudeRuntime = msg.runtime.claude;
+        codexRuntime = msg.runtime.codex;
         currentRoster = msg.runtime.roster;
         currentClaudeMode = msg.runtime.claudeMode;
+        currentCodexMode = msg.runtime.codexMode || 'mcp';
+        managedCodexAvailable = Boolean(msg.runtime.managedCodexAvailable);
+        codexManagedOption?.classList.toggle('hidden', !managedCodexAvailable);
         // Re-render both cards so bridge status + roster greying show immediately.
         if (lastPresence.codex) {
             renderAgentCard('codex', lastPresence.codex, currentSessionState ?? undefined);
@@ -190,9 +202,13 @@ function renderAgentCard(agent, presence, session) {
 
     // Surface the actual activation path alongside board presence.
     if (agent === 'codex') {
-        detailText += currentRoster?.codex
-            ? ' · Board path: own MCP session'
-            : ' · Not in session';
+        if (currentRoster?.codex && currentCodexMode === 'managed-exclusive') {
+            detailText += ` · Managed bridge: ${codexRuntime.status} — ${codexRuntime.detail}`;
+        } else {
+            detailText += currentRoster?.codex
+                ? ' · Board path: own MCP session'
+                : ' · Not in session';
+        }
     } else if (agent === 'claude' && currentClaudeMode === 'B') {
         detailText += ` · Managed bridge: ${claudeRuntime.status}`;
     } else if (agent === 'claude' && currentRoster?.claude) {
@@ -370,7 +386,12 @@ function updateModalVisibility() {
     // Claude paste prompt only matters for Mode A.
     claudeModeBlock?.classList.toggle('hidden', !claudeOn);
     claudePromptBlock?.classList.toggle('hidden', !(claudeOn && mode === 'A'));
-    codexInfoBlock?.classList.remove('hidden');
+    const codexOn = rosterCodex?.checked ?? false;
+    codexModeBlock?.classList.toggle('hidden', !codexOn);
+    codexManagedOption?.classList.toggle('hidden', !managedCodexAvailable);
+    const managed = selectedCodexMode() === 'managed-exclusive';
+    codexManagedWarning?.classList.toggle('hidden', !(codexOn && managed));
+    codexInfoBlock?.classList.toggle('hidden', !codexOn);
     forgeModelBlock?.classList.toggle('hidden', !rosterForge?.checked);
     if (rosterForge?.checked) {
         rosterClaude.checked = false;
@@ -381,6 +402,11 @@ function updateModalVisibility() {
 function selectedClaudeMode() {
     const checked = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name="claude-mode"]:checked'));
     return checked?.value === 'A' ? 'A' : 'B';
+}
+
+function selectedCodexMode() {
+    const checked = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name="codex-mode"]:checked'));
+    return managedCodexAvailable && checked?.value === 'managed-exclusive' ? 'managed-exclusive' : 'mcp';
 }
 
 /** @param {'draft'|'clanker'} mode */
@@ -548,6 +574,8 @@ document.getElementById('btn-connect')?.addEventListener('click', () => {
         rosterCodex.checked = Boolean(currentRoster.codex);
         rosterForge.checked = Boolean(currentRoster.forgeCoordinator);
     }
+    const codexModeRadio = /** @type {HTMLInputElement | null} */ (document.querySelector(`input[name="codex-mode"][value="${currentCodexMode}"]`));
+    if (codexModeRadio && (currentCodexMode !== 'managed-exclusive' || managedCodexAvailable)) codexModeRadio.checked = true;
     updateModalVisibility();
     connectModal.classList.remove('hidden');
     connectModal.setAttribute('aria-hidden', 'false');
@@ -565,11 +593,16 @@ document.getElementById('btn-confirm-connect')?.addEventListener('click', () => 
         showBanner('Select at least one orchestrator.', 'error');
         return;
     }
+    const codexMode = roster.codex ? selectedCodexMode() : 'mcp';
+    if (codexMode === 'managed-exclusive' && !window.confirm('Managed Codex is exclusive. Close other Codex IDE/desktop sessions before continuing. Forge Relay will refuse startup if another app-server is detected. Continue?')) {
+        return;
+    }
     vscode.postMessage({
         type: 'connectSession',
         agent: agent(),
         roster,
         claudeMode: selectedClaudeMode(),
+        codexMode,
         forgeCoordinatorModel: roster.forgeCoordinator ? forgeModel.value : undefined,
     });
     closeModal();
@@ -579,6 +612,9 @@ rosterClaude?.addEventListener('change', updateModalVisibility);
 rosterCodex?.addEventListener('change', updateModalVisibility);
 rosterForge?.addEventListener('change', updateModalVisibility);
 for (const radio of document.querySelectorAll('input[name="claude-mode"]')) {
+    radio.addEventListener('change', updateModalVisibility);
+}
+for (const radio of document.querySelectorAll('input[name="codex-mode"]')) {
     radio.addEventListener('change', updateModalVisibility);
 }
 

@@ -4,6 +4,15 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+- Added an opt-in experimental managed Codex coordinator using the current
+  app-server protocol, with a persistent thread, ordered board-event turns,
+  independent STOP/PAUSE interruption, and bounded restart behavior.
+- Kept Codex MCP-only mode as the default. Managed startup fails closed behind
+  a credential-home lease and external app-server process probe; it never kills
+  another owner and does not claim shared-login app-server concurrency is safe.
+- Shared one Codex process slot between managed mode and `codex exec` workers,
+  and added shell-free Windows npm-shim resolution for Codex launches.
+
 ## 0.5.1
 
 - Added task cards (FR-5): persistent, board-visible work items with a

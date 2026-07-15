@@ -2,25 +2,27 @@
 
 **Status:** active
 **Added:** 2026-07-12
-**File touched:** `src/subagentLoop.ts`
+**Files touched:** `src/codexExecutionGate.ts`, `src/subagentLoop.ts`, `src/runtimeManager.ts`
 
 ## What changed
 
 `dispatch_subagent` calls to a `codex` / `codex:<model>` worker used to spawn an
 independent, untracked `codex exec` subprocess with **no queue** — every overlapping
 dispatch got its own process racing the others. Added a process-wide `Semaphore(1)`
-(`codexSlot`, reusing the `Semaphore` class already in `src/forgeHold.ts`) so Codex
+(`codexProcessSlot`, reusing the `Semaphore` class already in `src/forgeHold.ts`) so Codex
 dispatches now run **one at a time**; extra dispatches wait in line instead of
-launching concurrently.
+launching concurrently. Experimental managed-exclusive mode acquires that same
+slot before starting and holds it for the app-server's full lifetime. Therefore
+Relay cannot start one of its own `codex exec` workers beside its managed process.
 
 ## Why
 
 `src/codexWorker.ts` documents the risk directly: a `codex exec` process is a second
 Codex login, and running it concurrently with another Codex process under the same
 ChatGPT OAuth subscription has historically risked `refresh_token_reused` /
-`token_revoked`, which can kill **both** sessions. `runtimeManager.ts` says the same
-thing at the top level ("Codex: NEVER spawned by Relay [as a pooled/supervised
-process] ... two codex app-servers on one ChatGPT OAuth login trip token_revoked").
+`token_revoked`, which can kill **both** sessions. Managed Codex is now available
+only as an explicit exclusive mode; its lease and process probe fail closed rather
+than treating shared-login concurrency as safe.
 Before this change, nothing in Relay actually enforced that — it only held as long as
 dispatches happened to be sequential in practice. We saw evidence of the gap: several
 simultaneous test dispatches (`echo hello-sandbox-test`, `npm --version`, etc.) each
@@ -38,13 +40,10 @@ If this turns out to be unwanted (e.g. it's serializing dispatches that used to 
 fine in parallel, or a future Relay version adds its own Codex session pooling that
 conflicts with this):
 
-1. In `src/subagentLoop.ts`, remove the `codexSlot` `Semaphore(1)` definition (near
-   `MAX_STEPS_DEFAULT`).
-2. Remove the `const releaseSlot = await codexSlot.acquire();` line and the
-   `releaseSlot();` call in `runCodex`'s `finally` block.
-3. Drop `Semaphore` from the `import { forgeHolds, forgeSlots, Semaphore } from
-   './forgeHold';` line (back to `forgeHolds, forgeSlots`).
-4. Delete this file.
+1. Remove the `acquireCodexProcessSlot()` acquisition and release from
+   `runCodex` in `src/subagentLoop.ts`.
+2. Remove the managed-runtime acquisition and release in `src/runtimeManager.ts`.
+3. Delete `src/codexExecutionGate.ts` and this note.
 
-No other files depend on `codexSlot`; the revert is fully self-contained to
-`subagentLoop.ts`.
+Do not remove only one caller: that would reintroduce Relay-owned overlap between
+managed mode and worker dispatches.
