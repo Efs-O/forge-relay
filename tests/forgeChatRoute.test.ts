@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chatCompletion, dispatchSubagentTier1, nextWorkerOrdinal, ResolvedModel, SubagentBackends } from '../src/subagent';
+import { chatCompletion, dispatchSubagentTier1, nextWorkerOrdinal, ResolvedModel, SubagentBackends, workerCompletionPayload } from '../src/subagent';
 import { runWorkerLoop } from '../src/subagentLoop';
 import { WorkerToolContext } from '../src/workerTools';
 
@@ -19,6 +19,18 @@ function captureUrl(response: unknown): { urls: string[] } {
     return { urls };
 }
 
+/** Capture parsed JSON request bodies, returning a canned OpenAI response. */
+function captureBody(response: unknown): { bodies: Array<Record<string, unknown>> } {
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: string | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify(response), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+    }) as typeof fetch;
+    return { bodies };
+}
+
 test('postChat targets /chat for a forge-chat (cloud proxy) backend', async () => {
     const captured = captureUrl({ choices: [{ message: { content: 'hi' } }] });
     const resolved: ResolvedModel = { backend: 'forge-chat', model: 'grok-4', baseUrl: 'http://127.0.0.1:8799' };
@@ -31,6 +43,31 @@ test('postChat targets /chat/completions for non-forge-chat backends', async () 
     const resolved: ResolvedModel = { backend: 'direct', model: 'm', baseUrl: 'http://127.0.0.1:8080/v1' };
     await chatCompletion(resolved, [{ role: 'user', content: 'x' }]);
     assert.equal(captured.urls[0], 'http://127.0.0.1:8080/v1/chat/completions');
+});
+
+test('Tier-1 llama.cpp workers disable thinking and default to 4096 tokens', async () => {
+    const captured = captureBody({ choices: [{ message: { content: 'hi' } }] });
+    const resolved: ResolvedModel = { backend: 'llama.cpp', model: 'gemma', baseUrl: 'http://127.0.0.1:8080/v1' };
+    await chatCompletion(resolved, [{ role: 'user', content: 'x' }]);
+    assert.equal(captured.bodies[0].max_tokens, 4096);
+    assert.deepEqual(captured.bodies[0].chat_template_kwargs, { enable_thinking: false });
+});
+
+test('Tier-1 maxTokens overrides the default worker cap', async () => {
+    const captured = captureBody({ choices: [{ message: { content: 'hi' } }] });
+    const resolved: ResolvedModel = { backend: 'direct', model: 'gemma', baseUrl: 'http://127.0.0.1:8080/v1' };
+    await chatCompletion(resolved, [{ role: 'user', content: 'x' }], { maxTokens: 8192 });
+    assert.equal(captured.bodies[0].max_tokens, 8192);
+    assert.deepEqual(captured.bodies[0].chat_template_kwargs, { enable_thinking: false });
+});
+
+test('workerCompletionPayload only changes thinking for llama.cpp backends', () => {
+    const llama: ResolvedModel = { backend: 'llamacpp', model: 'gemma', baseUrl: 'http://localhost' };
+    const cloud: ResolvedModel = { backend: 'forge-chat', model: 'grok', baseUrl: 'http://localhost' };
+    assert.deepEqual(workerCompletionPayload(llama, { messages: [] }, 6000), {
+        messages: [], max_tokens: 6000, chat_template_kwargs: { enable_thinking: false },
+    });
+    assert.deepEqual(workerCompletionPayload(cloud, { messages: [] }), { messages: [] });
 });
 
 test('runWorkerLoop surfaces an ERROR on empty content + finish_reason length (F1)', async () => {

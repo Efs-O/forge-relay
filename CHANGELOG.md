@@ -4,6 +4,11 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+- Fixed llama.cpp workers exhausting their completion budget on hidden reasoning:
+  worker requests now disable template-level thinking, Tier-1 dispatch defaults
+  to 4,096 completion tokens, and `dispatch_subagent` accepts a validated
+  `max_tokens` override for larger tasks.
+
 ## 0.5.1
 
 - Added task cards (FR-5): persistent, board-visible work items with a
