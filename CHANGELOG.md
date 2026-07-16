@@ -4,6 +4,16 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.6.1 (Experimental)
+
+- Moved managed-Codex confirmation from the webview to a VS Code modal so the
+  Start Session action always reaches the extension host and reports exclusive
+  process conflicts visibly.
+- Released the shared Codex execution gate when leaving managed mode or retrying
+  a stopped runtime, preventing a self-deadlock on subsequent starts.
+- Persisted a requested roster only after runtime startup succeeds, preventing a
+  rejected managed start from being retried automatically on window reload.
+
 ## 0.6.0 (Experimental)
 
 - Added an opt-in experimental managed Codex coordinator using the current

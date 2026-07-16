@@ -594,9 +594,6 @@ document.getElementById('btn-confirm-connect')?.addEventListener('click', () => 
         return;
     }
     const codexMode = roster.codex ? selectedCodexMode() : 'mcp';
-    if (codexMode === 'managed-exclusive' && !window.confirm('Managed Codex is exclusive. Close other Codex IDE/desktop sessions before continuing. Forge Relay will refuse startup if another app-server is detected. Continue?')) {
-        return;
-    }
     vscode.postMessage({
         type: 'connectSession',
         agent: agent(),
