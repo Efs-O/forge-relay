@@ -20,6 +20,10 @@ if (entries.length === 0) {
     process.exit(1);
 }
 
+// A branch switch can remove test sources while leaving their previously bundled
+// JavaScript behind. Clear the generated directory so node --test never executes
+// stale tests from another branch.
+fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 esbuild.buildSync({
     entryPoints: entries,
