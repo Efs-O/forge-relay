@@ -3,7 +3,7 @@ import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
 import { BoardWatcher } from './boardWatcher';
 import { ExtensionMessage, WebviewMessage } from './types';
-import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
+import { confirmManagedCodexStart, getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
 export class BoardPanel {
     public static current: BoardPanel | undefined;
@@ -177,21 +177,24 @@ export class BoardPanel {
                 case 'cancelTask':
                     this.bridge.cancelTask(msg.agent, msg.taskId, msg.note);
                     break;
-                case 'connectSession':
-                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, msg.codexMode ?? 'mcp');
+                case 'connectSession': {
+                    const codexMode = msg.codexMode ?? 'mcp';
+                    if (!(await confirmManagedCodexStart(codexMode))) break;
+                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, codexMode);
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
-                        codexMode: msg.codexMode ?? 'mcp',
+                        codexMode,
                     });
                     this.panel.webview.postMessage({
                         type: 'notice',
-                        message: sessionStartNotice(msg.roster, msg.claudeMode, msg.codexMode ?? 'mcp'),
+                        message: sessionStartNotice(msg.roster, msg.claudeMode, codexMode),
                     } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'stateUpdate', state: this.bridge.getState() } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'sessionState', session: this.bridge.getSessionState() } satisfies ExtensionMessage);
                     this.panel.webview.postMessage({ type: 'runtimeStatus', runtime: this.runtime.getSnapshot() } satisfies ExtensionMessage);
                     break;
+                }
                 case 'disconnectSession':
                     this.bridge.endSession(msg.agent);
                     await this.runtime.setRoster({ claude: false, codex: false }, this.runtime.getClaudeMode());

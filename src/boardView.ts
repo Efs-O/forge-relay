@@ -3,7 +3,7 @@ import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
 import { BoardWatcher } from './boardWatcher';
 import { BoardState, ExtensionMessage, WebviewMessage } from './types';
-import { getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
+import { confirmManagedCodexStart, getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
 
 export class BoardViewProvider implements vscode.WebviewViewProvider {
     public static readonly viewId = 'forgeRelay.boardView';
@@ -194,15 +194,17 @@ export class BoardViewProvider implements vscode.WebviewViewProvider {
                 case 'connectSession': {
                     // P3: apply the chosen roster. Only selected agents participate
                     // in the session; Codex joins via its own MCP session.
-                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, msg.codexMode ?? 'mcp');
+                    const codexMode = msg.codexMode ?? 'mcp';
+                    if (!(await confirmManagedCodexStart(codexMode))) break;
+                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, codexMode);
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
-                        codexMode: msg.codexMode ?? 'mcp',
+                        codexMode,
                     });
                     this.post({
                         type: 'notice',
-                        message: sessionStartNotice(msg.roster, msg.claudeMode, msg.codexMode ?? 'mcp'),
+                        message: sessionStartNotice(msg.roster, msg.claudeMode, codexMode),
                     });
                     this.post({ type: 'stateUpdate', state: this.bridge.getState() });
                     this.post({ type: 'sessionState', session: this.bridge.getSessionState() });

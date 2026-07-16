@@ -26,6 +26,19 @@ export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode
     return `Session started - ${parts.join('; ')}.`;
 }
 
+/** Use a host modal: browser confirm dialogs are unreliable inside VS Code webviews. */
+export async function confirmManagedCodexStart(codexMode: CodexMode): Promise<boolean> {
+    if (codexMode !== 'managed-exclusive') return true;
+    const start = 'Start managed Codex';
+    const choice = await vscode.window.showWarningMessage(
+        'Managed Codex is exclusive. Close other Codex IDE/desktop sessions first. '
+        + 'Forge Relay will refuse startup if another app-server is detected.',
+        { modal: true },
+        start,
+    );
+    return choice === start;
+}
+
 export function getWebviewHtml(
     webview: vscode.Webview,
     extensionUri: vscode.Uri,

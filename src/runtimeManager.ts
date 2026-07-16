@@ -278,10 +278,6 @@ export class RuntimeManager {
      * feature-gated managed-exclusive mode was selected.
      */
     async setRoster(roster: SessionRoster, claudeMode: ClaudeMode, forgeModel?: string, codexMode: CodexMode = 'mcp'): Promise<void> {
-        this.roster = { ...roster };
-        this.claudeMode = claudeMode;
-        this.codexMode = codexMode;
-
         if (forgeModel) {
             this.claude.stop();
             if (!this.forgeCoordinator) throw new Error('Forge control URL is not configured.');
@@ -311,7 +307,11 @@ export class RuntimeManager {
                 throw new Error('Managed Codex is disabled. Enable forgeRelay.experimentalManagedCodex or use MCP-only mode.');
             }
             const status = this.codexManaged.status();
-            if (status === 'stopped') await this.codexManaged.stop();
+            if (status === 'stopped') {
+                await this.codexManaged.stop();
+                this.codexGateRelease?.();
+                this.codexGateRelease = null;
+            }
             if (status === 'inactive' || status === 'stopped') {
                 this.codexGateRelease = await acquireCodexProcessSlot();
                 try {
@@ -326,8 +326,16 @@ export class RuntimeManager {
         } else {
             const managed = this.codexManaged;
             if (managed && managed.status() !== 'inactive') await managed.stop();
+            this.codexGateRelease?.();
+            this.codexGateRelease = null;
         }
 
+        // Persist/advertise the requested mode only after every selected runtime
+        // starts successfully. A failed exclusive preflight must not auto-retry
+        // the rejected roster on the next VS Code reload.
+        this.roster = { ...roster };
+        this.claudeMode = claudeMode;
+        this.codexMode = codexMode;
         this.emit();
     }
 
