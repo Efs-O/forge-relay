@@ -25,6 +25,10 @@ if (entries.length === 0) {
 // stale tests from another branch.
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
+const fixtureDir = path.join(testDir, 'fixtures');
+if (fs.existsSync(fixtureDir)) {
+    fs.cpSync(fixtureDir, path.join(outDir, 'fixtures'), { recursive: true });
+}
 esbuild.buildSync({
     entryPoints: entries,
     outdir: outDir,
