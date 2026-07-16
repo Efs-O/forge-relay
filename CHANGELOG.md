@@ -4,10 +4,14 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.5.2
+
 - Fixed llama.cpp workers exhausting their completion budget on hidden reasoning:
   worker requests now disable template-level thinking, Tier-1 dispatch defaults
   to 4,096 completion tokens, and `dispatch_subagent` accepts a validated
   `max_tokens` override for larger tasks.
+- Test builds now clear stale generated bundles, preventing removed tests from a
+  previously checked-out branch from contaminating the current branch's run.
 
 ## 0.5.1
 
