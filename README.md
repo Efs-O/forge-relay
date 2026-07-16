@@ -160,20 +160,26 @@ Add or merge this into the Claude settings file you want to use:
 
 If Claude stops launching after a workspace-level config change, rename workspace `.claude/settings.json` first, then `.claude/settings.local.json` if needed. Prefer renaming over deleting so rollback is immediate.
 
-### Codex as an orchestrator: MCP-only, by design
+### Codex as an orchestrator: MCP-only in stable releases
 
 Codex participates on the board through the `forgerelay` MCP entry in its own
-`~/.codex/config.toml` (see the setup snippet above). Forge Relay **never
-launches a long-lived Codex process**.
+`~/.codex/config.toml` (see the setup snippet above). Stable Forge Relay does
+not launch a long-lived Codex process.
 
 Why: a headless `codex app-server` spawned by Relay would be a *second*
 persistent Codex process on the same ChatGPT OAuth login as your sidebar/IDE
 Codex session. OpenAI's auth treats that as token reuse
 (`refresh_token_reused` / `token_revoked`) and kills **both** sessions
-server-side. There is no Relay-side fix; running a headless Codex orchestrator
-would require separate API-key credentials. The earlier managed Codex bridge
-(`scripts/codex-auto-bridge.js`) was removed for this reason — it survives in
-git history if API-key-based revival is ever wanted.
+server-side. Stable Relay therefore does not promise shared-login coexistence.
+The earlier WebSocket bridge (`scripts/codex-auto-bridge.js`) was removed for
+this reason.
+
+An exclusive, opt-in stdio app-server prototype now exists only on
+`feat/managed-codex-relay` and in the local 0.6.0 experimental VSIX. It uses a
+process probe and credential-home lease to fail closed when another owner is
+detected; it is not included in stable 0.5.2 or the Marketplace build. See
+`docs/CODEX_MANAGED_RELAY_REASSESSMENT_2026-07-14.md` for its remaining soak
+and coexistence gates.
 
 The **Codex worker backend** is different: each `dispatch_subagent` with model
 `"codex"` runs one short-lived `codex exec` work order that exits when the task
@@ -403,4 +409,5 @@ Maintained by [Efs-O](https://github.com/Efs-O) — amandoulou@yahoo.gr
 - [x] Build hook wrapper (`run_build`: pre-flight, configured claims, result post, and cleanup)
 - [x] Task cards with blocker state and severity tags
 - [x] VS Code Marketplace publish ([Efsoo.forge-relay](https://marketplace.visualstudio.com/items?itemName=Efsoo.forge-relay), v0.5.1)
+- [x] Stable v0.5.2 VSIX built and validated locally (Marketplace publication pending)
 - [ ] Session snapshots - Markdown export of the current split and open blockers (FR-4; explicitly deferred)
