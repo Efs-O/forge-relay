@@ -55,7 +55,7 @@ let claudeRuntime = { status: 'inactive', detail: 'Not connected.' };
 let codexRuntime = { status: 'inactive', detail: 'Not connected.' };
 /** @type {'A'|'B'} */
 let currentClaudeMode = 'B';
-/** @type {'mcp'|'managed-exclusive'} */
+/** @type {'mcp'|'managed-isolated'} */
 let currentCodexMode = 'mcp';
 let managedCodexAvailable = false;
 /** @type {{ claude: any, codex: any }} */
@@ -202,7 +202,7 @@ function renderAgentCard(agent, presence, session) {
 
     // Surface the actual activation path alongside board presence.
     if (agent === 'codex') {
-        if (currentRoster?.codex && currentCodexMode === 'managed-exclusive') {
+        if (currentRoster?.codex && currentCodexMode === 'managed-isolated') {
             detailText += ` · Managed bridge: ${codexRuntime.status} — ${codexRuntime.detail}`;
         } else {
             detailText += currentRoster?.codex
@@ -389,7 +389,7 @@ function updateModalVisibility() {
     const codexOn = rosterCodex?.checked ?? false;
     codexModeBlock?.classList.toggle('hidden', !codexOn);
     codexManagedOption?.classList.toggle('hidden', !managedCodexAvailable);
-    const managed = selectedCodexMode() === 'managed-exclusive';
+    const managed = selectedCodexMode() === 'managed-isolated';
     codexManagedWarning?.classList.toggle('hidden', !(codexOn && managed));
     codexInfoBlock?.classList.toggle('hidden', !codexOn);
     forgeModelBlock?.classList.toggle('hidden', !rosterForge?.checked);
@@ -406,7 +406,7 @@ function selectedClaudeMode() {
 
 function selectedCodexMode() {
     const checked = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name="codex-mode"]:checked'));
-    return managedCodexAvailable && checked?.value === 'managed-exclusive' ? 'managed-exclusive' : 'mcp';
+    return managedCodexAvailable && checked?.value === 'managed-isolated' ? 'managed-isolated' : 'mcp';
 }
 
 /** @param {'draft'|'clanker'} mode */
@@ -575,7 +575,7 @@ document.getElementById('btn-connect')?.addEventListener('click', () => {
         rosterForge.checked = Boolean(currentRoster.forgeCoordinator);
     }
     const codexModeRadio = /** @type {HTMLInputElement | null} */ (document.querySelector(`input[name="codex-mode"][value="${currentCodexMode}"]`));
-    if (codexModeRadio && (currentCodexMode !== 'managed-exclusive' || managedCodexAvailable)) codexModeRadio.checked = true;
+    if (codexModeRadio && (currentCodexMode !== 'managed-isolated' || managedCodexAvailable)) codexModeRadio.checked = true;
     updateModalVisibility();
     connectModal.classList.remove('hidden');
     connectModal.setAttribute('aria-hidden', 'false');

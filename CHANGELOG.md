@@ -4,6 +4,22 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.7.0 (Experimental)
+
+- Replaced machine-wide managed-Codex exclusivity with an isolated,
+  workspace-specific managed app-server profile. Existing Codex IDE, desktop,
+  CLI, and other-workspace processes are no longer startup conflicts and are
+  never terminated by Forge Relay.
+- Added **Forge Relay: Configure Isolated Managed Codex** for API-key login into
+  the isolated profile. The key is passed only to `codex login --with-api-key`;
+  managed requests use separately billed OpenAI Platform API usage.
+- Kept existing-session MCP mode as the default and retained serialized
+  `codex exec` workers, while allowing the isolated managed runtime to coexist
+  with those workers and externally owned Codex processes.
+- Renamed the experimental mode from `managed-exclusive` to
+  `managed-isolated` and replaced the arbitrary managed-home override with an
+  advanced profile-root setting that always appends a workspace fingerprint.
+
 ## 0.6.1 (Experimental)
 
 - Moved managed-Codex confirmation from the webview to a VS Code modal so the

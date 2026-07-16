@@ -166,26 +166,28 @@ Codex participates on the board through the `forgerelay` MCP entry in its own
 `~/.codex/config.toml` (see the setup snippet above). This **MCP-only mode is the
 default** and Forge Relay does not own the Codex process.
 
-An experimental **managed-exclusive** mode is available behind
-`forgeRelay.experimentalManagedCodex`. It uses the current Codex app-server
-protocol, one persistent thread, a machine-local lease keyed to the effective
-`CODEX_HOME`, and a fail-closed process probe. It refuses to start when another
-Codex app-server is detected or process ownership cannot be established. Select
-the managed option explicitly in Connect; use `forgeRelay.codexManagedHome` for
-a separately authenticated Codex home when desired.
+An experimental **managed-isolated** mode is available behind
+`forgeRelay.experimentalManagedCodex`. It starts a Relay-owned standalone Codex
+app-server with one persistent thread and a deterministic workspace profile.
+Its `CODEX_HOME`, `CODEX_SQLITE_HOME`, stdio, sessions, and workspace MCP routing
+are separate from the OpenAI sidebar and ordinary Codex CLI. Other Codex PIDs
+remain running and are diagnostic information, not startup conflicts.
+Relay also pins the managed process to file-backed credentials and its isolated
+SQLite path, so project-level Codex configuration cannot redirect either into a
+shared keyring or database.
 
-Exclusive means exclusive: this does not claim that two app-servers sharing one
-ChatGPT login are safe. Historical Codex versions produced
-`refresh_token_reused` / `token_revoked` failures in that topology. Close other
-Codex app-server sessions before managed mode, or stay in MCP-only mode. The
-probe is conservative best-effort OS inspection, not an OpenAI API guarantee.
+Before first use, run **Forge Relay: Configure Isolated Managed Codex**. The
+command provisions an OpenAI API key through `codex login --with-api-key` into
+this workspace's isolated profile; Forge Relay does not copy credentials from
+the normal Codex profile or store the plaintext key. Managed requests are billed
+separately through the OpenAI Platform account and share that account's quota
+and rate limits. Consumer ChatGPT authentication is not the supported isolated
+path in this experiment.
 
 The **Codex worker backend** is different: each `dispatch_subagent` with model
 `"codex"` runs one short-lived `codex exec` work order that exits when the task
-finishes. Relay serializes those workers, and managed-exclusive mode holds the
-same process slot for its lifetime, so Relay never starts its own worker beside
-its managed app-server. If you hit token-rotation errors, close other Codex
-sessions or use an isolated credential home.
+finishes. Relay continues to serialize worker dispatches with one another, but
+the isolated API-key-managed app-server may coexist with that worker lane.
 
 Codex log noise such as `codex_apps` / `chatgpt.com/backend-api/wham/apps`
 timeouts comes from Codex's own ChatGPT connectors/apps feature, not Forge
@@ -344,6 +346,10 @@ For Claude Code, add a pre-tool hook to enforce the pre-flight check automatical
 | `forgeRelay.subagentDirectUrl` | `http://127.0.0.1:8080/v1` | Raw llama.cpp override endpoint. Use mainly for debugging or forced routing. |
 | `forgeRelay.codexExecutable` | `""` (= `codex` on PATH) | Codex CLI executable for the `codex` worker backend of `dispatch_subagent`. |
 | `forgeRelay.codexWorkerTimeoutMs` | `900000` | Wall-clock cap for one `codex exec` worker run (15 min); the process is killed past it. |
+| `forgeRelay.experimentalManagedCodex` | `false` | Expose the experimental isolated managed Codex session option. |
+| `forgeRelay.codexManagedProfileRoot` | `""` | Advanced profile root override. Forge Relay always appends a workspace fingerprint; empty uses extension global storage. |
+| `forgeRelay.codexManagedModel` | `""` | Optional model override for isolated managed Codex. |
+| `forgeRelay.codexManagedTurnTimeoutMs` | `900000` | Wall-clock cap for one isolated managed board-event turn. |
 
 ---
 
@@ -369,6 +375,7 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 | `Forge Relay: STOP All Agents` | Post an immediate STOP command targeting all agents |
 | `Forge Relay: Get Started` | One-shot onboarding: configure Codex + Claude, then open the verification report |
 | `Forge Relay: Configure Codex` | Write the `[mcp_servers.forgerelay]` entry into `~/.codex/config.toml` automatically (zero-touch Codex setup; never clobbers an existing entry) |
+| `Forge Relay: Configure Isolated Managed Codex` | Authenticate this workspace's isolated managed profile with an OpenAI Platform API key without changing the ordinary Codex profile |
 | `Forge Relay: Configure Claude` | Write the `forgerelay` MCP entry into `~/.claude/settings.json` (merges into existing JSON; never clobbers an existing entry) |
 | `Forge Relay: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
 | `Forge Relay: Verify Setup` | Check whether Codex and Claude MCP config are correctly wired on this machine |

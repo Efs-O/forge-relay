@@ -104,9 +104,14 @@ export interface SessionRoster {
 
 // Mode A = interactive /loop paste (the user's own Claude chat); Mode B = headless
 // SDK bridge (P4). Codex defaults to the user's MCP session; the experimental
-// managed-exclusive mode is guarded against concurrent app-server ownership.
+// managed-isolated mode owns a workspace-specific app-server profile.
 export type ClaudeMode = 'A' | 'B';
-export type CodexMode = 'mcp' | 'managed-exclusive';
+export type CodexMode = 'mcp' | 'managed-isolated';
+
+/** Migrate the experimental 0.6.x value while failing unknown modes back to MCP. */
+export function normalizeCodexMode(value: unknown): CodexMode {
+    return value === 'managed-isolated' || value === 'managed-exclusive' ? 'managed-isolated' : 'mcp';
+}
 
 export interface RuntimeStatusSnapshot {
     claude: { status: RuntimeBridgeStatus; detail: string };
