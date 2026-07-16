@@ -361,6 +361,13 @@ Completed on Windows against `codex-cli 0.144.4`:
 - production build and VSIX packaging: pass.
 - packaged contents: runtime bundles present; source/tests and generated test
   output absent.
+- VSIX installation: `efsoo.forge-relay@0.7.0` installed successfully through
+  the VS Code 1.129 CLI.
+- disposable extension-host activation: pass. The installed bundle activated
+  on `onStartupFinished` in a separate user-data directory and created the
+  temporary workspace coordination state. No activation exception occurred;
+  VS Code emitted only its non-fatal `PendingMigrationError` deprecation warning
+  while loading a bundled validation dependency.
 - isolated stdio protocol smoke: `initialize` and `account/read` pass with no
   inherited credential variables and with forced isolated SQLite/file auth.
 - coexistence smoke: one pre-existing Codex app-server plus two disposable
@@ -369,7 +376,7 @@ Completed on Windows against `codex-cli 0.144.4`:
 - experimental VSIX: `forge-relay-isolated-codex-experimental-0.7.0.vsix`.
   SHA-256: `8BDF788271F1255F83C226DD63140C63213B34E3F36FA2E0C48B8F9B80DA3A46`.
 
-Still required before merging: install the VSIX, provision the isolated profile
-with an operator-supplied Platform API key, and complete the credentialed
+Still required before merging: reload an operator window, provision the isolated
+profile with an operator-supplied Platform API key, and complete the credentialed
 multi-workspace/board-event/STOP acceptance steps in Phase 5. No API key was
 available to the build process, so those steps have not been claimed as passed.
