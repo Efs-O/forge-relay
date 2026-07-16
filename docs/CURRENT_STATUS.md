@@ -19,10 +19,11 @@ Forge Relay still appends a deterministic workspace fingerprint.
 
 The experiment targets version 0.7.0. Type checking, 181 automated tests,
 production build, VSIX inspection, isolated protocol startup, and a live
-Windows `1 -> 3 -> 1` app-server coexistence smoke pass. It is not ready to
-merge to `main` until an operator-supplied Platform API key completes the
-installed-VSIX board-event, CLI/worker, multi-workspace, STOP/restart, and
-credential-leak acceptance checks.
+Windows `1 -> 3 -> 1` app-server coexistence smoke pass. The 0.7.0 VSIX also
+installs and activates successfully in a disposable VS Code 1.129 extension
+host. It is not ready to merge to `main` until an operator reloads an installed
+window and an operator-supplied Platform API key completes the board-event,
+CLI/worker, multi-workspace, STOP/restart, and credential-leak acceptance checks.
 
 ## Released
 
