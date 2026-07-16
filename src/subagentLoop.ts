@@ -1,7 +1,7 @@
 import { spawnSync } from 'child_process';
 import { Bridge } from './bridge';
 import {
-    chatCompletionRaw, dispatchSubagentTier1, ResolvedModel,
+    chatCompletionRaw, dispatchSubagentTier1, ResolvedModel, workerCompletionPayload,
     SubagentBackends, SubagentToolMode, workerAgentName, validateBackend, modelRoutingNote, beginWorkerRun, endWorkerRun, formatWorkerPost,
     decideForgeRoute, fetchForgeCatalog, forgeHealthz, withConnRetry, BackendConnectionError,
 } from './subagent';
@@ -26,6 +26,8 @@ export interface WorkerLoopOptions {
     /** Notified before each transient-connection retry of a model turn (for board debug logging). */
     onRetry?: (attempt: number, delayMs: number, err: BackendConnectionError) => void;
     signal?: AbortSignal;
+    /** Optional completion-token cap applied to every worker round. */
+    maxTokens?: number;
 }
 
 export interface WorkerLoopResult {
@@ -107,7 +109,11 @@ export async function runWorkerLoop(
         const round = await runToolCompletionRound({
             messages,
             complete: () => withConnRetry(
-                () => chatCompletionRaw(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.signal),
+                () => chatCompletionRaw(
+                    resolved,
+                    workerCompletionPayload(resolved, { messages, tools, tool_choice: 'auto', temperature: 0.2 }, opts.maxTokens),
+                    opts.signal,
+                ),
                 { signal: opts.signal, onRetry: opts.onRetry },
             ) as Promise<CompletionResponse>,
             executeTool: async (name, args) => {
@@ -184,6 +190,17 @@ export async function handleDispatchSubagent(
     const task = String(args.task ?? '').trim();
     if (!model) { return 'ERROR: dispatch_subagent requires a model.'; }
     if (!task) { return 'ERROR: dispatch_subagent requires a task.'; }
+
+    const rawMaxTokens = args.max_tokens;
+    if (rawMaxTokens !== undefined && (
+        typeof rawMaxTokens !== 'number' ||
+        !Number.isInteger(rawMaxTokens) ||
+        rawMaxTokens < 1 ||
+        rawMaxTokens > 131_072
+    )) {
+        return 'ERROR: dispatch_subagent max_tokens must be an integer from 1 to 131072.';
+    }
+    const maxTokens = rawMaxTokens as number | undefined;
 
     const toolsSpecified = args.tools !== undefined;
     let requestedTools = (String(args.tools ?? 'none') as SubagentToolMode);
@@ -356,7 +373,13 @@ export async function handleDispatchSubagent(
         try {
             // Reuse the worker identity already reserved above (F2: avoids a second
             // beginWorkerRun that double-counts the ordinal and collides on worker-N).
-            const r = await dispatchSubagentTier1(bridge, backends, { dispatcher, model, task, context }, resolved, worker);
+            const r = await dispatchSubagentTier1(
+                bridge,
+                backends,
+                { dispatcher, model, task, context, maxTokens },
+                resolved,
+                worker,
+            );
             return r.status === 'completed'
                 ? `SUBAGENT ${r.subagentId} (${model})${modelNote} COMPLETED:\n\n${r.result}`
                 : `SUBAGENT ${r.subagentId} (${model}) ERROR: ${r.error}`;
@@ -393,6 +416,7 @@ export async function handleDispatchSubagent(
         const slot = await acquireSlot();
         try {
             const result = await runWorkerLoop(resolved, ctx, task, context, {
+                maxTokens,
                 shouldAbort: () => {
                     const blocking = bridge.getBlockingCommands(worker);
                     return blocking.length ? `board STOP/PAUSE (${blocking[0].text})` : null;
