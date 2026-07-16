@@ -4,6 +4,8 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.6.0 (Experimental)
+
 - Added an opt-in experimental managed Codex coordinator using the current
   app-server protocol, with a persistent thread, ordered board-event turns,
   independent STOP/PAUSE interruption, and bounded restart behavior.

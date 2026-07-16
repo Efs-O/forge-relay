@@ -1,8 +1,8 @@
 {
   "name": "forge-relay",
-  "displayName": "Forge Relay",
+  "displayName": "Forge Relay (Managed Codex Experimental)",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "preview": true,
