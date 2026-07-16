@@ -13,6 +13,15 @@ All notable changes to the Forge Relay extension.
 - Shared one Codex process slot between managed mode and `codex exec` workers,
   and added shell-free Windows npm-shim resolution for Codex launches.
 
+## 0.5.2
+
+- Fixed llama.cpp workers exhausting their completion budget on hidden reasoning:
+  worker requests now disable template-level thinking, Tier-1 dispatch defaults
+  to 4,096 completion tokens, and `dispatch_subagent` accepts a validated
+  `max_tokens` override for larger tasks.
+- Test builds now clear stale generated bundles, preventing removed tests from a
+  previously checked-out branch from contaminating the current branch's run.
+
 ## 0.5.1
 
 - Added task cards (FR-5): persistent, board-visible work items with a
