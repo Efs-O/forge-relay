@@ -102,6 +102,8 @@ export interface DispatchOptions {
     context?: string;
     tools?: SubagentToolMode;
     mode?: SubagentRunMode;
+    /** Optional completion-token cap supplied by dispatch_subagent. */
+    maxTokens?: number;
 }
 
 export interface ResolvedModel {
@@ -190,6 +192,20 @@ export interface ChatMessage {
     content: string;
 }
 
+/** Tier-1 workers need enough room to produce an answer after any hidden preamble. */
+export const DEFAULT_WORKER_MAX_TOKENS = 4_096;
+
+/**
+ * llama.cpp chat templates can enable reasoning independently of prompt wording.
+ * Worker calls explicitly disable it so hidden reasoning cannot consume the
+ * entire completion budget before visible content or a tool call is emitted.
+ */
+function workerTemplateOverrides(resolved: ResolvedModel): Record<string, unknown> {
+    const backend = resolved.backend.toLowerCase().replace(/[^a-z]/g, '');
+    const isLlamaCpp = resolved.backend === 'direct' || backend === 'llamacpp';
+    return isLlamaCpp ? { chat_template_kwargs: { enable_thinking: false } } : {};
+}
+
 /**
  * Turn an opaque fetch failure into something a human can act on. Node's global
  * fetch throws a bare `TypeError: fetch failed` on connection refused / DNS /
@@ -254,7 +270,8 @@ export async function chatCompletion(
         model: resolved.model,
         messages,
         temperature: opts.temperature ?? 0.2,
-        max_tokens: opts.maxTokens ?? 1024,
+        max_tokens: opts.maxTokens ?? DEFAULT_WORKER_MAX_TOKENS,
+        ...workerTemplateOverrides(resolved),
         stream: false,
     }, opts.signal) as { choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }> };
     const choice = data.choices?.[0];
@@ -337,6 +354,19 @@ export async function chatCompletionRaw(
     signal?: AbortSignal,
 ): Promise<unknown> {
     return postChat(resolved, { model: resolved.model, stream: false, ...payload }, signal);
+}
+
+/** Add worker-only request controls without changing coordinator completions. */
+export function workerCompletionPayload(
+    resolved: ResolvedModel,
+    payload: Record<string, unknown>,
+    maxTokens?: number,
+): Record<string, unknown> {
+    return {
+        ...payload,
+        ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+        ...workerTemplateOverrides(resolved),
+    };
 }
 
 // ── Model discovery + endpoint validation (list_models tool + pre-dispatch check) ─
@@ -911,7 +941,7 @@ export async function dispatchSubagentTier1(
             { role: 'user', content: opts.context ? `${opts.task}\n\nContext:\n${opts.context}` : opts.task },
         ];
 
-        const result = await chatCompletion(resolved, messages);
+        const result = await chatCompletion(resolved, messages, { maxTokens: opts.maxTokens });
         bridge.post(worker, formatWorkerPost(`done [${subagentId.slice(0, 10)}]: ${result}`));
         return { subagentId, status: 'completed', result };
     } catch (err) {
@@ -949,6 +979,7 @@ export const DISPATCH_SUBAGENT_TOOL = {
             context: { type: 'string', description: 'Optional inline context for the worker.' },
             tools: { type: 'string', enum: ['none', 'readonly', 'full'], description: 'Worker capability tier: none=reasoning only; readonly=read+propose_diff; full=read/write/edit/run.' },
             mode: { type: 'string', enum: ['sync', 'async'], description: 'sync blocks until done and returns the result inline (use for quick tasks). async returns immediately and the worker runs in the background, posting progress to the board and @mentioning you when finished so you can review (use for long build tasks).' },
+            max_tokens: { type: 'integer', minimum: 1, maximum: 131072, description: 'Optional completion-token cap for local/cloud model workers. Tier-1 defaults to 4096.' },
         },
         required: ['agent', 'model', 'task'],
     },
