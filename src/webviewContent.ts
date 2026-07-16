@@ -13,8 +13,8 @@ export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode
     }
     const parts: string[] = [];
     if (roster.codex) {
-        parts.push(codexMode === 'managed-exclusive'
-            ? 'managed Codex starting in exclusive mode'
+        parts.push(codexMode === 'managed-isolated'
+            ? 'isolated managed Codex starting'
             : 'Codex expected through its own MCP session');
     }
     if (roster.forgeCoordinator) parts.push('Forge model coordinator starting');
@@ -28,11 +28,12 @@ export function sessionStartNotice(roster: SessionRoster, claudeMode: ClaudeMode
 
 /** Use a host modal: browser confirm dialogs are unreliable inside VS Code webviews. */
 export async function confirmManagedCodexStart(codexMode: CodexMode): Promise<boolean> {
-    if (codexMode !== 'managed-exclusive') return true;
-    const start = 'Start managed Codex';
+    if (codexMode !== 'managed-isolated') return true;
+    const start = 'Start isolated Codex';
     const choice = await vscode.window.showWarningMessage(
-        'Managed Codex is exclusive. Close other Codex IDE/desktop sessions first. '
-        + 'Forge Relay will refuse startup if another app-server is detected.',
+        'Forge Relay will start another Codex process with isolated local state for this workspace. '
+        + 'Your existing Codex IDE and CLI sessions remain running. Setup requires an OpenAI API key, '
+        + 'and managed usage is billed separately through the OpenAI Platform account and shares its rate limits.',
         { modal: true },
         start,
     );
@@ -244,7 +245,7 @@ export function getWebviewHtml(
                     <select id="forge-model"><option value="">Loading Forge models...</option></select>
                     <p id="forge-model-error" class="prompt-note"></p>
                 </div>
-                <p class="prompt-note modal-note">Use your existing Codex session normally. Experimental managed mode is exclusive and refuses to start while another Codex app-server is detected.</p>
+                <p class="prompt-note modal-note">Use your existing Codex session normally, or run an isolated automatic board participant without closing other Codex IDE or CLI sessions.</p>
             </div>
 
             <div class="mode-block" id="claude-mode-block">
@@ -256,8 +257,8 @@ export function getWebviewHtml(
             <div class="mode-block hidden" id="codex-mode-block">
                 <h3>Codex mode</h3>
                 <label class="check-row"><input type="radio" name="codex-mode" value="mcp" checked> Use my existing Codex session (recommended)</label>
-                <label class="check-row hidden" id="codex-managed-option"><input type="radio" name="codex-mode" value="managed-exclusive"> Run managed Codex exclusively (experimental)</label>
-                <p id="codex-managed-warning" class="prompt-note hidden">Close Codex IDE/desktop sessions first. Forge Relay performs a conservative process check and will fail closed if exclusivity cannot be established.</p>
+                <label class="check-row hidden" id="codex-managed-option"><input type="radio" name="codex-mode" value="managed-isolated"> Run isolated managed Codex (experimental)</label>
+                <p id="codex-managed-warning" class="prompt-note hidden">Starts another Codex PID with separate local state for this workspace. Existing Codex sessions stay running. Configure this isolated profile with an OpenAI API key first; Platform API usage is billed separately and shares account rate limits.</p>
             </div>
 
             <div class="prompt-block" id="claude-prompt-block">
@@ -272,7 +273,7 @@ export function getWebviewHtml(
                 <div class="prompt-head">
                     <h3>Codex path</h3>
                 </div>
-                <p class="prompt-note" id="codex-path-note">Codex joins through its own session with the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Managed mode is opt-in, experimental, and exclusive because concurrent app-servers sharing authentication/state are not guaranteed safe.</p>
+                <p class="prompt-note" id="codex-path-note">Existing-session mode uses the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Isolated managed mode is opt-in and runs a Relay-owned app-server with workspace-specific state and separately configured OpenAI Platform authentication.</p>
             </div>
 
             <div class="modal-actions">

@@ -31,11 +31,6 @@ export interface CodexManagedLease {
     releaseIfOwned(): void;
 }
 
-export interface CodexProcessProbeResult {
-    status: 'clear' | 'external' | 'blocked' | 'unknown';
-    detail?: string;
-}
-
 export interface CodexManagedBoard {
     getBlockingCommands(agent: string): Command[];
     getAutonomyMode(): 'draft' | 'clanker';
@@ -51,7 +46,6 @@ export interface CodexManagedBridgeOptions {
         handleServerRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
     }) => CodexAppServerAdapter;
     lease: CodexManagedLease;
-    processProbe: (ownedChildPid?: number) => CodexProcessProbeResult | Promise<CodexProcessProbeResult>;
     model?: string;
     developerInstructions?: string;
     eventMode?: 'all' | 'mentions';
@@ -90,7 +84,7 @@ export function classifyCodexManagedFailure(error: unknown): CodexFailureKind {
     if (/refresh[_ -]?token[_ -]?reused|token[_ -]?invalidated|invalid[_ -]?grant|unauthenticated|not logged in|login required|401\b/i.test(message)) {
         return 'fatal-auth';
     }
-    if (/external .*app-server|process probe.*unknown|credential.*lease|held by (?:another|live)|contention/i.test(message)) {
+    if (/managed profile (?:ownership )?lease|managed profile is (?:already )?owned|held by (?:another|live)|contention/i.test(message)) {
         return 'fatal-contention';
     }
     if (/unsupported protocol|malformed protocol|method not found|invalid initialize|mcp .*failed to (?:start|initialize)|required mcp/i.test(message)) {
@@ -155,9 +149,9 @@ function boundedMessage(message: string, max: number): string {
 }
 
 /**
- * Product-level managed Codex coordinator. Transport, machine-wide ownership,
- * and OS process discovery are adapters so none of those policies leak into the
- * board/turn state machine.
+ * Product-level managed Codex coordinator. Transport and isolated-profile
+ * ownership are adapters so those policies do not leak into the board/turn
+ * state machine. External Codex processes are intentionally irrelevant here.
  */
 export class CodexManagedBridge {
     readonly agent = AGENT;
@@ -198,19 +192,16 @@ export class CodexManagedBridge {
         this.halted = false;
         this.restartAttempts = 0;
         this.tail.reset();
-        this.setStatus('waiting', 'Acquiring exclusive managed Codex ownership...');
+        this.setStatus('waiting', 'Acquiring isolated managed profile ownership...');
         try {
             const acquired = await this.opts.lease.tryAcquire();
             if (acquired === 'held-by-live-other') {
-                throw new Error('Codex credential lease is held by another live managed runtime.');
+                throw new Error('Managed profile ownership lease is held by another live Forge Relay runtime.');
             }
             if (acquired === 'unknown') {
-                throw new Error('Codex credential lease could not be read or acquired safely.');
+                throw new Error('Managed profile ownership lease could not be read or acquired safely.');
             }
             this.leaseOwned = true;
-            const probe = await this.opts.processProbe();
-            if (probe.status === 'external' || probe.status === 'blocked') throw new Error(`External Codex app-server detected${probe.detail ? `: ${probe.detail}` : ''}.`);
-            if (probe.status === 'unknown') throw new Error(`Codex process probe is unknown${probe.detail ? `: ${probe.detail}` : ''}.`);
             await this.openSession();
             this.startTimers();
         } catch (error) {
@@ -573,8 +564,12 @@ export class CodexManagedBridge {
 
     private actionableError(error: unknown, kind: CodexFailureKind): string {
         const message = error instanceof Error ? error.message : String(error);
-        if (kind === 'fatal-auth') return `Managed Codex authentication failed. Re-login to Codex, then reconnect. ${message}`;
-        if (kind === 'fatal-contention') return `Managed Codex ownership could not be established. Close other Codex app-server sessions or use MCP-only mode. ${message}`;
+        if (kind === 'fatal-auth') {
+            return `Managed Codex authentication failed. Run "Forge Relay: Configure Isolated Managed Codex", then reconnect. ${message}`;
+        }
+        if (kind === 'fatal-contention') {
+            return `This isolated managed profile is already owned by another Forge Relay runtime. Stop that Relay runtime or use existing-session MCP mode. ${message}`;
+        }
         if (kind === 'fatal-protocol') return `Managed Codex protocol setup failed; use MCP-only mode until Codex is compatible. ${message}`;
         return `Managed Codex startup failed: ${message}`;
     }

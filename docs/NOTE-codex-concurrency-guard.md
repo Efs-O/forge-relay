@@ -1,6 +1,6 @@
 # Note — Codex dispatch concurrency guard
 
-**Status:** active
+**Status:** active for `codex exec` workers only; managed-runtime use removed in 0.7.0
 **Added:** 2026-07-12
 **Files touched:** `src/codexExecutionGate.ts`, `src/subagentLoop.ts`, `src/runtimeManager.ts`
 
@@ -11,18 +11,20 @@ independent, untracked `codex exec` subprocess with **no queue** — every overl
 dispatch got its own process racing the others. Added a process-wide `Semaphore(1)`
 (`codexProcessSlot`, reusing the `Semaphore` class already in `src/forgeHold.ts`) so Codex
 dispatches now run **one at a time**; extra dispatches wait in line instead of
-launching concurrently. Experimental managed-exclusive mode acquires that same
-slot before starting and holds it for the app-server's full lifetime. Therefore
-Relay cannot start one of its own `codex exec` workers beside its managed process.
+launching concurrently.
+
+The 0.6.x managed-exclusive runtime also held this slot for its full lifetime.
+The 0.7.0 managed-isolated architecture removes that acquisition: its standalone
+app-server uses a workspace-specific local profile and separately provisioned
+OpenAI Platform API-key authentication, so it may coexist with the serialized
+worker lane. Worker-to-worker serialization remains unchanged.
 
 ## Why
 
-`src/codexWorker.ts` documents the risk directly: a `codex exec` process is a second
-Codex login, and running it concurrently with another Codex process under the same
-ChatGPT OAuth subscription has historically risked `refresh_token_reused` /
-`token_revoked`, which can kill **both** sessions. Managed Codex is now available
-only as an explicit exclusive mode; its lease and process probe fail closed rather
-than treating shared-login concurrency as safe.
+`src/codexWorker.ts` documents the historical risk directly: overlapping
+short-lived `codex exec` processes sharing ChatGPT OAuth may race token refresh.
+Serializing Relay-dispatched workers keeps that risk bounded without imposing a
+machine-wide rule on unrelated Codex processes.
 Before this change, nothing in Relay actually enforced that — it only held as long as
 dispatches happened to be sequential in practice. We saw evidence of the gap: several
 simultaneous test dispatches (`echo hello-sandbox-test`, `npm --version`, etc.) each
@@ -34,16 +36,15 @@ that serializing is strictly safer and costs little (Codex dispatches are alread
 usually run one at a time by the orchestrator; the guard only matters when two land
 close together).
 
-## How to revert
+## Scope and removal
 
-If this turns out to be unwanted (e.g. it's serializing dispatches that used to run
-fine in parallel, or a future Relay version adds its own Codex session pooling that
-conflicts with this):
+If worker serialization turns out to be unwanted (for example, a future Relay
+version gives workers isolated authentication and session pooling):
 
 1. Remove the `acquireCodexProcessSlot()` acquisition and release from
    `runCodex` in `src/subagentLoop.ts`.
-2. Remove the managed-runtime acquisition and release in `src/runtimeManager.ts`.
-3. Delete `src/codexExecutionGate.ts` and this note.
+2. Delete `src/codexExecutionGate.ts` and this note.
 
-Do not remove only one caller: that would reintroduce Relay-owned overlap between
-managed mode and worker dispatches.
+Do not restore the managed runtime's lifetime acquisition. Managed-isolated mode
+is designed and tested to coexist with independently authenticated processes;
+external Codex PID discovery is informational, not part of this guard.

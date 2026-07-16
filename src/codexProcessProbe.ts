@@ -1,6 +1,6 @@
 import { spawnSync } from 'child_process';
 
-export type CodexProcessProbeStatus = 'clear' | 'blocked' | 'unknown';
+export type CodexProcessProbeStatus = 'clear' | 'found' | 'unknown';
 
 export interface CodexProcessProbeResult {
     status: CodexProcessProbeStatus;
@@ -44,7 +44,7 @@ const defaultRunner: ProcessCommandRunner = (command, args, timeoutMs) => {
     };
 };
 
-/** Probe for an external Codex app-server without returning command lines. */
+/** Discover Codex app-servers for diagnostics without returning command lines. */
 export function probeCodexAppServers(options: CodexProcessProbeOptions = {}): CodexProcessProbeResult {
     const platform = options.platform ?? process.platform;
     const timeoutMs = Math.max(250, Math.min(options.timeoutMs ?? 5_000, 15_000));
@@ -81,9 +81,9 @@ export function probeCodexAppServers(options: CodexProcessProbeOptions = {}): Co
     if (pids.length) {
         const shown = pids.slice(0, 4).join(', ');
         const suffix = pids.length > 4 ? ` and ${pids.length - 4} more` : '';
-        return { status: 'blocked', detail: `Another Codex app-server is running (PID ${shown}${suffix}).`, pids };
+        return { status: 'found', detail: `Codex app-server process detected (PID ${shown}${suffix}).`, pids };
     }
-    return { status: 'clear', detail: 'No other Codex app-server process was detected.' };
+    return { status: 'clear', detail: 'No Codex app-server process was detected.' };
 }
 
 export function parseWindowsRows(stdout: string): ProcessRow[] | null {

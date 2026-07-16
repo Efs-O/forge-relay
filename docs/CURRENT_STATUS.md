@@ -1,14 +1,28 @@
 # Forge Relay — Current Status
 
-Last refreshed: 2026-07-15
+Last refreshed: 2026-07-17
 
 ## In development
 
-The `feat/managed-codex-relay` branch adds an opt-in managed-exclusive Codex
-coordinator. MCP-only remains the default. Managed startup is guarded by a
-credential-home lease, external app-server process probe, and the same serialized
-process slot used by Codex workers. This is an exclusivity design, not a guarantee
-that concurrent app-servers sharing one ChatGPT login are supported.
+The `feat/managed-codex-relay` branch is replacing the opt-in
+managed-exclusive coordinator with a managed-isolated Codex runtime. MCP-only
+remains the default. The isolated mode owns a standalone app-server, persistent
+thread, workspace-specific `CODEX_HOME` and `CODEX_SQLITE_HOME`, and a profile
+ownership lease. It uses separately provisioned OpenAI Platform API-key
+authentication and does not read or copy the user's ordinary Codex credentials.
+
+Existing Codex IDE, desktop, CLI, and other-workspace app-server processes are
+allowed to remain active. Process discovery is diagnostic only; Forge Relay
+neither blocks on nor terminates external Codex PIDs. The advanced
+`forgeRelay.codexManagedProfileRoot` setting may relocate the profile root, but
+Forge Relay still appends a deterministic workspace fingerprint.
+
+The experiment targets version 0.7.0. Type checking, 181 automated tests,
+production build, VSIX inspection, isolated protocol startup, and a live
+Windows `1 -> 3 -> 1` app-server coexistence smoke pass. It is not ready to
+merge to `main` until an operator-supplied Platform API key completes the
+installed-VSIX board-event, CLI/worker, multi-workspace, STOP/restart, and
+credential-leak acceptance checks.
 
 ## Released
 

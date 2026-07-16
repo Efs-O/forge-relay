@@ -15,7 +15,7 @@ export interface CodexRuntimeLeaseRecord {
     heartbeatAt: string;
     extensionVersion: string;
     repoRoot: string;
-    homeFingerprint: string;
+    profileFingerprint: string;
     status: CodexRuntimeLeaseStatus;
 }
 
@@ -55,28 +55,28 @@ function defaultIsPidAlive(pid: number | undefined): boolean {
     }
 }
 
-/** Normalize the effective CODEX_HOME without reading anything inside it. */
-export function normalizeCodexHome(home: string, platform: NodeJS.Platform = process.platform): string {
-    const raw = home.trim();
-    if (!raw) { throw new Error('Effective Codex home is empty.'); }
+/** Normalize the isolated managed profile path without reading anything inside it. */
+export function normalizeManagedProfile(profilePath: string, platform: NodeJS.Platform = process.platform): string {
+    const raw = profilePath.trim();
+    if (!raw) { throw new Error('Managed Codex profile path is empty.'); }
     if (platform === 'win32') {
         return path.win32.resolve(raw).replace(/[\\/]+$/, '').toLowerCase();
     }
     return path.posix.resolve(raw).replace(/\/+$/, '') || '/';
 }
 
-/** Non-secret identity used only as the machine-local lease filename. */
-export function codexHomeFingerprint(
-    home: string,
+/** Non-secret managed-profile identity used only for machine-local ownership. */
+export function managedProfileFingerprint(
+    profilePath: string,
     userIdentity = defaultUserIdentity(),
     platform: NodeJS.Platform = process.platform,
 ): string {
-    const normalized = normalizeCodexHome(home, platform);
+    const normalized = normalizeManagedProfile(profilePath, platform);
     return createHash('sha256').update(`${platform}\0${userIdentity}\0${normalized}`, 'utf8').digest('hex');
 }
 
 /**
- * Machine-local, credential-home keyed lease for one Relay-owned Codex app-server.
+ * Machine-local, isolated-profile keyed lease for one Relay-owned Codex app-server.
  *
  * This deliberately does not kill or replace a live owner, including an owner
  * from an older extension version. An unreadable record also fails closed.
@@ -89,20 +89,20 @@ export class CodexRuntimeLease {
     private readonly ownerToken: string;
 
     constructor(
-        effectiveCodexHome: string,
+        managedProfilePath: string,
         private readonly repoRoot: string,
         private readonly ownerPid: number,
         private readonly extensionVersion: string,
         options: CodexRuntimeLeaseOptions = {},
     ) {
-        this.fingerprint = codexHomeFingerprint(
-            effectiveCodexHome,
+        this.fingerprint = managedProfileFingerprint(
+            managedProfilePath,
             options.userIdentity ?? defaultUserIdentity(),
             options.platform ?? process.platform,
         );
         const lockDir = options.lockDir ?? defaultLockDir();
         fs.mkdirSync(lockDir, { recursive: true });
-        this.leasePath = path.join(lockDir, `codex-${this.fingerprint}.lock`);
+        this.leasePath = path.join(lockDir, `managed-profile-${this.fingerprint}.lock`);
         this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
         this.now = options.now ?? (() => new Date());
         this.ownerToken = options.ownerToken ?? randomUUID();
@@ -153,7 +153,7 @@ export class CodexRuntimeLease {
             heartbeatAt: now,
             extensionVersion: this.extensionVersion,
             repoRoot: this.repoRoot,
-            homeFingerprint: this.fingerprint,
+            profileFingerprint: this.fingerprint,
             status: 'starting',
         };
         try {
@@ -195,7 +195,7 @@ export class CodexRuntimeLease {
         }
         try {
             const record = JSON.parse(raw) as Partial<CodexRuntimeLeaseRecord>;
-            if (record.version !== 1 || record.homeFingerprint !== this.fingerprint
+            if (record.version !== 1 || record.profileFingerprint !== this.fingerprint
                 || typeof record.ownerToken !== 'string' || !record.ownerToken
                 || !Number.isInteger(record.pid) || (record.pid ?? 0) <= 0
                 || typeof record.startedAt !== 'string' || typeof record.heartbeatAt !== 'string'

@@ -8,9 +8,8 @@ import { ForgeCoordinatorBridge } from './forgeCoordinatorBridge';
 import { CodexManagedBridge, CodexAppServerAdapter } from './codexManagedBridge';
 import { CodexAppServerClient, CodexRpcNotification, CodexServerRequest } from './codexAppServerClient';
 import { CodexRuntimeLease } from './codexRuntimeLease';
-import { probeCodexAppServers } from './codexProcessProbe';
 import { resolveCodexExecutable } from './codexExecutable';
-import { acquireCodexProcessSlot } from './codexExecutionGate';
+import { CodexManagedProfile, codexManagedIsolationOverrides } from './codexManagedProfile';
 
 export interface RuntimeAgentSnapshot {
     status: RuntimeStatus;
@@ -70,7 +69,7 @@ export interface RuntimeManagerOptions {
     /** Opt-in feature gate. MCP-only remains the default and fallback. */
     experimentalManagedCodex?: boolean;
     codexExecutable?: string;
-    effectiveCodexHome?: string;
+    codexManagedProfile?: CodexManagedProfile;
     codexManagedModel?: string;
     codexManagedTurnTimeoutMs?: number;
     onLog?: (line: string) => void;
@@ -85,8 +84,8 @@ export interface RuntimeManagerOptions {
  *    process, so the Claude bridge stays inactive.
  *  - Claude Mode B: supervised headless Claude Agent SDK bridge (P4).
  *  - Codex MCP mode: the user's own interactive session (the safe default).
- *  - Codex managed-exclusive mode: an opt-in app-server session guarded by a
- *    credential-home lease, an external-process probe, and a shared exec gate.
+ *  - Codex managed-isolated mode: an opt-in app-server session with a
+ *    workspace-specific home/SQLite profile and Relay-only ownership lease.
  */
 export class RuntimeManager {
     private readonly claude: ScriptRuntimeBridge;
@@ -99,7 +98,6 @@ export class RuntimeManager {
     // the zero-paste headless bridge). Inert until a roster selects Claude.
     private claudeMode: ClaudeMode = 'B';
     private codexMode: CodexMode = 'mcp';
-    private codexGateRelease: (() => void) | null = null;
     /** Absolute path to this extension build's out/mcpStdio.js (resolved from
      *  context.extensionUri at activation, so it always points at the *current*
      *  install — this is what makes the Mode A config self-healing). */
@@ -123,12 +121,17 @@ export class RuntimeManager {
         }) : null;
 
         if (opts.experimentalManagedCodex) {
-            const effectiveHome = opts.effectiveCodexHome?.trim();
-            if (!effectiveHome) throw new Error('Managed Codex requires an effective CODEX_HOME.');
-            const lease = new CodexRuntimeLease(effectiveHome, opts.repoRoot, process.pid, opts.extensionVersion);
+            const managedProfile = opts.codexManagedProfile;
+            if (!managedProfile?.home || !managedProfile.sqliteHome || !managedProfile.root) {
+                throw new Error('Managed Codex requires a complete isolated runtime profile.');
+            }
+            const lease = new CodexRuntimeLease(managedProfile.root, opts.repoRoot, process.pid, opts.extensionVersion);
             const nodeExecutable = opts.nodePath?.trim() || 'node';
             const mcpEnv = { ...(opts.subagentEnv ?? {}) };
-            const appServerEnv = { ...process.env, CODEX_HOME: effectiveHome };
+            const appServerEnv = {
+                ...process.env,
+                ...managedProfile.env,
+            };
             const createAdapter = (handlers: {
                 handleServerRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
             }): CodexAppServerAdapter => {
@@ -152,6 +155,11 @@ export class RuntimeManager {
                     env: appServerEnv,
                     requestTimeoutMs: 30_000,
                     configOverrides: {
+                        // Command-line config wins over project .codex/config.toml.
+                        // Keep both database state and persisted credentials inside
+                        // the Relay-owned profile even when a repository requests a
+                        // shared sqlite path or operating-system credential store.
+                        ...codexManagedIsolationOverrides(managedProfile),
                         'mcp_servers.forgerelay': {
                             command: nodeExecutable,
                             args: [opts.mcpStdioPath, '--repoRoot', opts.repoRoot],
@@ -186,20 +194,10 @@ export class RuntimeManager {
                 repoRoot: opts.repoRoot,
                 clientFactory: createAdapter,
                 lease,
-                processProbe: () => {
-                    const result = probeCodexAppServers();
-                    return { status: result.status === 'blocked' ? 'external' : result.status, detail: result.detail };
-                },
                 model: opts.codexManagedModel,
                 turnTimeoutMs: opts.codexManagedTurnTimeoutMs,
                 onLog: opts.onLog,
-                onStatus: (status) => {
-                    if ((status === 'stopped' || status === 'inactive') && this.codexGateRelease) {
-                        this.codexGateRelease();
-                        this.codexGateRelease = null;
-                    }
-                    this.emit();
-                },
+                onStatus: () => this.emit(),
             });
         } else {
             this.codexManaged = null;
@@ -275,7 +273,7 @@ export class RuntimeManager {
      * Apply the orchestrator selection chosen at Connect (plan §2.4). The Claude
      * headless bridge runs only for selected + Mode B; Mode A is the user's own
      * /loop paste (no managed process). Codex is MCP-only unless the explicit,
-     * feature-gated managed-exclusive mode was selected.
+     * feature-gated managed-isolated mode was selected.
      */
     async setRoster(roster: SessionRoster, claudeMode: ClaudeMode, forgeModel?: string, codexMode: CodexMode = 'mcp'): Promise<void> {
         if (forgeModel) {
@@ -301,7 +299,7 @@ export class RuntimeManager {
             this.ensureClaudeMcpConfig();
         }
 
-        const wantsManagedCodex = roster.codex && codexMode === 'managed-exclusive';
+        const wantsManagedCodex = roster.codex && codexMode === 'managed-isolated';
         if (wantsManagedCodex) {
             if (!this.codexManaged) {
                 throw new Error('Managed Codex is disabled. Enable forgeRelay.experimentalManagedCodex or use MCP-only mode.');
@@ -309,25 +307,18 @@ export class RuntimeManager {
             const status = this.codexManaged.status();
             if (status === 'stopped') {
                 await this.codexManaged.stop();
-                this.codexGateRelease?.();
-                this.codexGateRelease = null;
             }
             if (status === 'inactive' || status === 'stopped') {
-                this.codexGateRelease = await acquireCodexProcessSlot();
                 try {
                     await this.codexManaged.start();
                 } catch (error) {
                     await this.codexManaged.stop();
-                    this.codexGateRelease?.();
-                    this.codexGateRelease = null;
                     throw error;
                 }
             }
         } else {
             const managed = this.codexManaged;
             if (managed && managed.status() !== 'inactive') await managed.stop();
-            this.codexGateRelease?.();
-            this.codexGateRelease = null;
         }
 
         // Persist/advertise the requested mode only after every selected runtime
@@ -400,8 +391,6 @@ export class RuntimeManager {
         this.roster = { claude: false, codex: false, forgeCoordinator: false };
         this.claude.stop();
         await this.codexManaged?.stop();
-        this.codexGateRelease?.();
-        this.codexGateRelease = null;
         await this.forgeCoordinator?.stop();
     }
 

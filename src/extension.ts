@@ -11,10 +11,12 @@ import { BoardWatcher } from './boardWatcher';
 import { RuntimeManager } from './runtimeManager';
 import { subagentEnvFromBackends } from './subagent';
 import { RuntimeStatus } from './runtimeBridge';
-import { BoardEvent, ClaudeMode, CodexMode, SessionRoster } from './types';
+import { BoardEvent, ClaudeMode, CodexMode, normalizeCodexMode, SessionRoster } from './types';
 import { isVsCodeInstallDir } from './vscodeInstallDir';
 import { resolveForgeControlUrl } from './forgeControlDiscovery';
 import { probeCodexAppServers } from './codexProcessProbe';
+import { CodexManagedProfile, ensureCodexManagedProfile } from './codexManagedProfile';
+import { configureManagedCodexApiKey } from './codexManagedAuth';
 
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
@@ -94,8 +96,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // the stdio server all agree on a single coordination dir.
     const eventsPath = bridge.getEventsPath();
 
+    // Resolve a workspace-specific managed profile outside both the repository
+    // and the user's ordinary Codex home. Existing IDE/CLI Codex processes are
+    // allowed to coexist; only a second Relay owner of this exact profile is
+    // rejected by the runtime lease.
+    const managedFeatureRequested = config.get<boolean>('experimentalManagedCodex', false);
+    const resolveManagedProfile = async (): Promise<CodexManagedProfile> => {
+        const configuredRoot = config.get<string>('codexManagedProfileRoot', '').trim();
+        const globalStorageRoot = configuredRoot || context.globalStorageUri.fsPath;
+        if (isVsCodeInstallDir(globalStorageRoot)) {
+            throw new Error('Managed Codex profile root must not be a VS Code installation directory.');
+        }
+        return ensureCodexManagedProfile({
+            globalStorageRoot,
+            repoRoot,
+            remoteAuthority: vscode.env.remoteName,
+            defaultCodexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+        });
+    };
+    let managedProfile: CodexManagedProfile | undefined;
+    let managedProfileError: string | undefined;
+    if (managedFeatureRequested) {
+        try {
+            managedProfile = await resolveManagedProfile();
+            log(`[codex] isolated profile=${managedProfile.root} sqlite=${managedProfile.sqliteHome}`);
+        } catch (error) {
+            managedProfileError = error instanceof Error ? error.message : String(error);
+            log(`[codex] isolated profile unavailable: ${managedProfileError}`);
+            vscode.window.showWarningMessage(`Forge Relay: isolated managed Codex is unavailable. ${managedProfileError}`);
+        }
+    }
+
     // Supervised runtime bridges. Codex remains MCP-only unless its experimental
-    // managed-exclusive mode is both enabled and explicitly selected.
+    // managed-isolated mode is both enabled and explicitly selected.
     const runtimeStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     runtimeStatusBar.command = 'forgeRelay.openBoard';
 
@@ -114,10 +147,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         claudeModel: config.get<string>('claudeModel', '').trim() || undefined,
         claudeKeepAliveMs: config.get<number>('claudeKeepAliveMs', 0),
         claudeKeepAliveMaxPings: config.get<number>('claudeKeepAliveMaxPings', 3),
-        experimentalManagedCodex: config.get<boolean>('experimentalManagedCodex', false),
+        experimentalManagedCodex: managedFeatureRequested && Boolean(managedProfile),
         codexExecutable: subagentBackends.codexExecutable,
-        effectiveCodexHome: config.get<string>('codexManagedHome', '').trim()
-            || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+        codexManagedProfile: managedProfile,
         codexManagedModel: config.get<string>('codexManagedModel', '').trim() || undefined,
         codexManagedTurnTimeoutMs: config.get<number>('codexManagedTurnTimeoutMs', 900_000),
         subagentEnv: subagentEnvFromBackends(subagentBackends),
@@ -130,7 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const renderStatusBar = (): void => {
         const snap = rm.getSnapshot();
-        const managedCodex = snap.codexMode === 'managed-exclusive' && snap.roster.codex;
+        const managedCodex = snap.codexMode === 'managed-isolated' && snap.roster.codex;
         const primaryStatus = managedCodex ? snap.codex.status : snap.claude.status;
         runtimeStatusBar.text = `$(${statusBarIcon(primaryStatus)}) Forge Relay: `
             + (managedCodex ? `Codex ${snap.codex.status}` : `Claude ${snap.claude.status}`);
@@ -161,7 +193,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const savedSession = context.workspaceState.get<{
         roster: SessionRoster;
         claudeMode: ClaudeMode;
-        codexMode?: CodexMode;
+        codexMode?: CodexMode | 'managed-exclusive';
         forgeCoordinatorModel?: string;
     }>(ROSTER_KEY);
     if (savedSession?.roster && (savedSession.roster.claude || savedSession.roster.codex || savedSession.roster.forgeCoordinator)) {
@@ -170,7 +202,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 { ...savedSession.roster },
                 savedSession.claudeMode ?? 'A',
                 savedSession.forgeCoordinatorModel,
-                savedSession.codexMode ?? 'mcp',
+                normalizeCodexMode(savedSession.codexMode),
             );
         } catch (error) {
             log(`[bridge] saved session restore failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -215,14 +247,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         vscode.commands.registerCommand('forgeRelay.verifySetup', async () => {
             const managedEnabled = config.get<boolean>('experimentalManagedCodex', false);
+            let profile = managedProfile;
+            let profileError = managedProfileError;
+            if (managedEnabled && !profile && !profileError) {
+                try { profile = await resolveManagedProfile(); }
+                catch (error) { profileError = error instanceof Error ? error.message : String(error); }
+            }
             const report = buildVerifySetupReport(
                 context.extensionUri.fsPath,
                 repoRoot,
                 mcpServer?.getPort() ?? port,
                 {
                     enabled: managedEnabled,
-                    home: config.get<string>('codexManagedHome', '').trim()
-                        || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+                    profile,
+                    profileError,
                     probe: managedEnabled ? probeCodexAppServers() : undefined,
                 },
             );
@@ -252,6 +290,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const action = await vscode.window.showInformationMessage(
                 `Forge Relay: ${verb} Codex MCP config at ${fwd}. Restart Codex to pick it up.`, 'Open config');
             if (action === 'Open config') { await openConfig(); }
+        }),
+
+        vscode.commands.registerCommand('forgeRelay.configureManagedCodex', async () => {
+            let profile: CodexManagedProfile;
+            try {
+                profile = await resolveManagedProfile();
+            } catch (error) {
+                vscode.window.showErrorMessage(
+                    `Forge Relay: could not create the isolated Codex profile. ${error instanceof Error ? error.message : String(error)}`,
+                );
+                return;
+            }
+            let apiKey = await vscode.window.showInputBox({
+                title: 'Configure Isolated Managed Codex',
+                prompt: 'Enter an OpenAI Platform API key. Managed usage is API-billed. The key is sent only to Codex login over stdin and is not retained by Forge Relay.',
+                placeHolder: 'sk-...',
+                password: true,
+                ignoreFocusOut: true,
+                validateInput: value => value.trim() ? undefined : 'An API key is required.',
+            });
+            if (!apiKey) return;
+            try {
+                const result = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Configuring isolated managed Codex...',
+                    cancellable: false,
+                }, () => configureManagedCodexApiKey({
+                    profile,
+                    apiKey: apiKey!,
+                    configuredExecutable: subagentBackends.codexExecutable,
+                    cwd: repoRoot,
+                }));
+                if (result.ok) {
+                    managedProfile = profile;
+                    managedProfileError = undefined;
+                    vscode.window.showInformationMessage(
+                        'Forge Relay: isolated managed Codex authentication configured. Reload the window if the managed option was previously unavailable.',
+                    );
+                } else {
+                    vscode.window.showErrorMessage(`Forge Relay: ${result.message}`);
+                }
+            } finally {
+                apiKey = undefined;
+            }
         }),
 
         vscode.commands.registerCommand('forgeRelay.configureClaude', async () => {
@@ -467,7 +549,12 @@ function buildVerifySetupReport(
     extensionPath: string,
     repoRoot: string,
     mcpPort: number,
-    managed?: { enabled: boolean; home: string; probe?: ReturnType<typeof probeCodexAppServers> },
+    managed?: {
+        enabled: boolean;
+        profile?: CodexManagedProfile;
+        profileError?: string;
+        probe?: ReturnType<typeof probeCodexAppServers>;
+    },
 ): string {
     const stdioPath = getStdioPath(extensionPath);
     const codexConfigPath = getCodexConfigPath();
@@ -496,11 +583,18 @@ function buildVerifySetupReport(
         formatCheck('Codex config has `forgerelay` entry', codexConfig.hasEntry, describeInspection(codexConfig)),
         formatCheck('Codex config does not hardwire a global `--repoRoot`', !codexHardwiredRepoRoot.hasEntry, describeInspection(codexHardwiredRepoRoot)),
         formatCheck('At least one checked Claude settings file has `forgerelay` entry', anyClaudeConfigured, summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])),
+        ...(managed?.enabled ? [
+            formatCheck('Managed Codex isolated profile available', Boolean(managed.profile),
+                managed.profile?.root ?? managed.profileError ?? 'Profile was not resolved.'),
+        ] : []),
         ...(managed?.enabled && managed.probe ? [
-            formatCheck('Managed Codex exclusive-process preflight', managed.probe.status === 'clear', managed.probe.detail),
+            `- Codex process diagnostics: ${managed.probe.detail} This is informational and does not block isolated managed startup.`,
         ] : []),
         `- Managed Codex feature: ${managed?.enabled ? 'enabled (experimental)' : 'disabled; MCP-only is the default'}.`,
-        ...(managed?.enabled ? [`- Effective managed CODEX_HOME: \`${toForwardSlashes(managed.home)}\`.`] : []),
+        ...(managed?.profile ? [
+            `- Isolated managed CODEX_HOME: \`${toForwardSlashes(managed.profile.home)}\`.`,
+            `- Isolated managed CODEX_SQLITE_HOME: \`${toForwardSlashes(managed.profile.sqliteHome)}\`.`,
+        ] : []),
         '',
         '## Claude file inspection',
         '',

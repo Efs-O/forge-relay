@@ -2,6 +2,7 @@
 src/**
 tests/**
 out/tests/**
+out/focused-tests/**
 smoke/**
 .pytest_cache/**
 **/__pycache__/**

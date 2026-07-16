@@ -120,7 +120,6 @@ function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unknown ?
     const statuses: string[] = [];
     const bridge = new CodexManagedBridge({
         board, lease, eventsPath, repoRoot: root,
-        processProbe: () => ({ status: 'clear' }),
         clientFactory: () => { const client = new FakeClient(); clients.push(client); return client; },
         eventPollMs: 60_000, blockingPollMs: 60_000, burstWindowMs: 1,
         turnTimeoutMs: 500, interruptTimeoutMs: 100, restartBaseMs: 1, restartMaxMs: 2,
@@ -253,20 +252,23 @@ test('unexpected approval requests are denied without expanding permissions', as
     assert.deepEqual(await clients[0].serverRequest('item/commandExecution/requestApproval'), { decision: 'decline', approved: false });
 });
 
-test('fatal authentication and exclusive-preflight failures release ownership without restart', async (t) => {
+test('fatal authentication and same-profile ownership failures release without restart', async (t) => {
     const auth = fixture(t);
     const client = new FakeClient();
     client.account = { account: null, requiresOpenaiAuth: true };
     (auth.bridge as unknown as { opts: { clientFactory: () => FakeClient } }).opts.clientFactory = () => client;
     await assert.rejects(auth.bridge.start(), /Unauthenticated/);
     assert.equal(auth.bridge.status(), 'stopped');
+    assert.match(auth.bridge.detailText(), /Configure Isolated Managed Codex/);
     assert.equal(auth.lease.released, 1);
 
     const held = fixture(t);
     held.lease.result = 'held-by-live-other';
-    await assert.rejects(held.bridge.start(), /lease is held/);
+    await assert.rejects(held.bridge.start(), /profile ownership lease is held/);
     assert.equal(held.clients.length, 0, 'contention must prevent app-server creation');
     assert.equal(held.bridge.status(), 'stopped');
+    assert.match(held.bridge.detailText(), /another Forge Relay runtime/);
+    assert.doesNotMatch(held.bridge.detailText(), /close other Codex app-server/i);
 });
 
 test('a transient transport close performs bounded recovery with a new persistent session', async (t) => {
@@ -281,6 +283,8 @@ test('a transient transport close performs bounded recovery with a new persisten
 test('failure classification separates token/auth and protocol faults from transient errors', () => {
     assert.equal(classifyCodexManagedFailure(new Error('refresh_token_reused')), 'fatal-auth');
     assert.equal(classifyCodexManagedFailure(new Error('unsupported protocol response')), 'fatal-protocol');
-    assert.equal(classifyCodexManagedFailure(new Error('external Codex app-server detected')), 'fatal-contention');
+    assert.equal(classifyCodexManagedFailure(new Error('managed profile ownership lease is held by another live runtime')), 'fatal-contention');
+    assert.equal(classifyCodexManagedFailure(new Error('external Codex app-server detected')), 'transient');
+    assert.equal(classifyCodexManagedFailure(new Error('process probe is unknown')), 'transient');
     assert.equal(classifyCodexManagedFailure(new Error('socket closed')), 'transient');
 });
