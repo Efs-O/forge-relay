@@ -370,6 +370,11 @@ Completed on Windows against `codex-cli 0.144.4`:
   while loading a bundled validation dependency.
 - isolated stdio protocol smoke: `initialize` and `account/read` pass with no
   inherited credential variables and with forced isolated SQLite/file auth.
+- real CLI auth persistence smoke: `codex login --with-api-key` accepted a known
+  fake key through stdin, wrote the only secret-containing file to the
+  disposable isolated `CODEX_HOME`, did not echo it, left the ordinary
+  `~/.codex/auth.json` hash unchanged, and exited successfully. The disposable
+  profile was removed without making a model request.
 - coexistence smoke: one pre-existing Codex app-server plus two disposable
   isolated app-servers were observed concurrently (`1 -> 3 -> 1`); both
   isolated clients exited cleanly and the pre-existing process remained.
