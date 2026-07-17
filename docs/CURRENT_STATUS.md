@@ -97,7 +97,9 @@ forge-relay resumed a fresh different-agent MCP turn afterward. Gemma4GR then
 reloaded: its old managed process chain exited, a new chain started under the
 same isolated profile and SQLite store, forge-relay retained its original PIDs,
 and `GEMMA4GR_RELOAD_PASSED` routed only on the recovered workspace board.
-Remaining merge gates are explicit plan-type capture and token-refresh soak.
+The operator recorded the subscription plan as Plus, confirming the expected
+non-Platform ChatGPT subscription context. The only remaining managed-runtime
+merge gate is token-refresh soak.
 
 ## Published
 
