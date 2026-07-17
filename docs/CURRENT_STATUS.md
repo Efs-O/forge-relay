@@ -29,12 +29,23 @@ installation, and a live unauthenticated ChatGPT login-start/cancel smoke agains
 to merge until browser subscription sign-in and the installed board-event,
 CLI/worker, multi-workspace, STOP/restart, and token refresh/soak acceptance pass.
 
-Version 0.8.1 improves the startup UI: an unauthenticated managed start now
-offers ChatGPT sign-in and automatically retries the requested session after
-successful browser authentication. The shared recovery behavior passes four
-additional automated tests across success, cancellation, and unrelated-error
-paths. The full 188-test suite and production build pass, and the inspected
-0.8.1 VSIX is installed locally for interactive acceptance.
+Version 0.8.1 improved the startup UI, but its first authenticated board turn
+exposed an unhandled Codex 0.144.4 `mcpServer/elicitation/request`. Version
+0.8.2 now accepts only the exact active-thread/active-turn Forge Relay MCP tool
+elicitation and continues to deny broader command, file, stale-turn, malformed,
+and unrelated app-server requests. TypeScript, all 191 tests, the production
+build, VSIX inspection, and installation passed. Commit `19f8695` contains the
+fix; installed artifact SHA-256 is
+`5fc03484e06c4123308f3dca9d8b1a00d3aa1ca7abd27c255060b6f7db6e6320`.
+
+Live acceptance now confirms that the isolated ChatGPT-authenticated 0.8.2
+runtime starts, receives a user board event, and posts a Codex reply while the
+operator's existing Codex session remains active. A later `codex`-authored
+connectivity post correctly produced no managed reply because self-authored
+events are intentionally filtered to prevent feedback loops. Basic managed
+subscription coordination is therefore working. Merge remains gated on the
+independent CLI/worker, second-workspace, STOP/restart, and token-refresh/soak
+checks described in the isolated-runtime plan.
 
 ## Released
 

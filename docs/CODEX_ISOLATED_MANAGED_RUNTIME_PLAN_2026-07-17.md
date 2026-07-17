@@ -281,9 +281,11 @@ Tests must prove:
 ## 10. Live Windows acceptance
 
 1. Keep the ordinary OpenAI Codex sidebar signed in and active.
-2. Sign the isolated workspace profile in through the new ChatGPT command.
+2. **Passed 2026-07-17:** sign the isolated workspace profile in through the
+   new ChatGPT command.
 3. Confirm `account/read` reports `chatgpt` and the expected plan type.
-4. Start managed Codex and complete a real board-event turn/MCP post.
+4. **Passed 2026-07-17 on 0.8.2:** start managed Codex and complete a real
+   board-event turn/MCP post.
 5. Run an independent subscription-backed terminal Codex task concurrently.
 6. Sign in and start a second workspace profile concurrently.
 7. Confirm all external PIDs remain alive and each managed profile routes only
@@ -353,12 +355,29 @@ that the subscription requirement is met.
   the production build. The inspected VSIX is installed as
   `efsoo.forge-relay@0.8.2`; SHA-256:
   `5fc03484e06c4123308f3dca9d8b1a00d3aa1ca7abd27c255060b6f7db6e6320`.
+- After the operator completed isolated ChatGPT sign-in and reloaded VS Code,
+  managed Codex received a user-authored board post and posted a reply through
+  Forge Relay. This validates the installed 0.8.2 board-event, app-server,
+  elicitation-approval, MCP, and reply path while the existing Codex session
+  remained usable.
+- A follow-up post authored as `codex` did not trigger another managed Codex
+  reply. This is expected: the shared event filter suppresses self-authored
+  events to prevent an infinite `codex -> codex` feedback loop. Use a `user` or
+  different-agent post for future connectivity acceptance.
 
 ### Corrected evidence still required before merge
 
-- Complete browser login and confirm `account.type == "chatgpt"` plus the
-  returned subscription plan type.
-- Real subscription-backed managed board turn with sidebar active.
+- Record the returned subscription plan type explicitly; successful managed
+  startup already proves the enforced `account.type == "chatgpt"` check passed.
 - CLI/worker and second-workspace concurrency.
 - STOP/restart isolation.
 - Token refresh/soak with no invalidation.
+
+### Next-session resume point
+
+Start from installed experimental version 0.8.2 and commit `19f8695`. Do not
+rework login, PID isolation, or MCP elicitation unless new evidence regresses
+the successful user-to-managed-Codex board reply. Continue with the remaining
+acceptance gates in this order: independent subscription-backed CLI/worker,
+second workspace, STOP/restart isolation, then token-refresh soak. Keep board
+mode off unless the operator explicitly activates it in the new session.
