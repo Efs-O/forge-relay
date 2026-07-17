@@ -283,7 +283,9 @@ Tests must prove:
 1. Keep the ordinary OpenAI Codex sidebar signed in and active.
 2. **Passed 2026-07-17:** sign the isolated workspace profile in through the
    new ChatGPT command.
-3. Confirm `account/read` reports `chatgpt` and the expected plan type.
+3. **Passed 2026-07-17:** enforced startup confirmed `account.type ==
+   "chatgpt"`, and the operator recorded the returned subscription plan as
+   Plus.
 4. **Passed 2026-07-17 on 0.8.2:** start managed Codex and complete a real
    board-event turn/MCP post.
 5. **Passed 2026-07-17 on installed R3:** an independent subscription-backed
@@ -411,11 +413,12 @@ that the subscription requirement is met.
   chain retained its original PIDs. The operator observed
   `GEMMA4GR_RELOAD_PASSED` on the recovered workspace route, and the marker was
   absent from the forge-relay board.
+- The operator recorded the isolated ChatGPT subscription plan as Plus. This is
+  non-secret acceptance metadata confirming that the runtime uses the expected
+  subscription context rather than Platform API-key authentication.
 
 ### Corrected evidence still required before merge
 
-- Record the returned subscription plan type explicitly; successful managed
-  startup already proves the enforced `account.type == "chatgpt"` check passed.
 - Token refresh/soak with no invalidation.
 
 ### Next-session resume point
@@ -423,7 +426,6 @@ that the subscription requirement is met.
 Start from installed 0.8.3-rc1 and its successful managed-write plus sync/async
 worker evidence. Do not rework login, PID isolation, permission encoding,
 executable discovery, or MCP elicitation unless new evidence regresses those
-paths. Continue with explicit plan-type capture and token-refresh soak.
-Separately normalize or document the worker `0.144.2` versus managed/terminal
-`0.144.4` resolution. Keep board mode off in a new session unless the operator
-explicitly activates it there.
+paths. Continue with token-refresh soak. Separately normalize or document the
+worker `0.144.2` versus managed/terminal `0.144.4` resolution. Keep board mode
+off in a new session unless the operator explicitly activates it there.
