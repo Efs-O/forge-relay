@@ -375,6 +375,15 @@ that the subscription requirement is met.
 - The worker catalog reported `codex-cli 0.144.2`, while earlier terminal and
   managed diagnostics reported `0.144.4`. Both live paths passed, but the
   client-specific PATH/version skew should be normalized or documented.
+- After merging current `main`, candidate
+  `forge-relay-subscription-codex-experimental-0.8.3-rc1.vsix` passed TypeScript,
+  all 219 tests, the production build, and archive inspection. It contains the
+  required runtime bundles and no source, tests, documentation, coordination
+  state, maps, or credential files. It is installed as
+  `efsoo.forge-relay@0.8.3`; SHA-256:
+  `572DD52FE304167B9230799589538306A2BF0365992990B7C088AE9A14B07346`.
+  Existing VS Code processes predate installation, so this candidate has not
+  yet received an exact-artifact live acceptance pass.
 
 ### Corrected evidence still required before merge
 

@@ -78,6 +78,15 @@ and all 219 automated tests pass. The repo-only implementation and remaining
 installed/upstream gates are recorded in
 `docs/FORGE_RELAY_PIPELINE_REMEDIATION_PLAN_2026-07-17.md`.
 
+Candidate 0.8.3-rc1 was built after merging the latest `main` into the feature
+branch. The merged tree passes TypeScript, all 219 tests, the production build,
+and VSIX inspection. The archive is installed as `efsoo.forge-relay@0.8.3` and
+has SHA-256
+`572DD52FE304167B9230799589538306A2BF0365992990B7C088AE9A14B07346`.
+The running VS Code windows predate that installation, so exact-artifact live
+acceptance remains pending a reload; installation alone is not counted as an
+acceptance pass.
+
 ## Published
 
 `Efsoo.forge-relay` version 0.5.1 is published on the VS Code Marketplace.
