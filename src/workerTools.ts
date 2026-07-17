@@ -9,10 +9,15 @@ export interface WorkerToolContext {
     repoRoot: string;
     /** draft = readonly + propose_diff only; clanker = real writes/exec (denylist-bounded). */
     autonomy: WorkerAutonomy;
+    /** Claim/authorize a repo-relative target before any mutation begins. */
+    authorizeMutation?: (target: string) => void;
 }
 
 export interface WorkerToolResult {
     result: string;
+    /** False means the tool was refused or failed and still requires recovery. */
+    ok?: boolean;
+    errorKind?: 'policy_refusal' | 'permission' | 'invalid_path' | 'claim_conflict' | 'spawn_error' | 'nonzero_exit' | 'timeout' | 'tool_error' | 'unknown_tool';
     /** Set when this call mutated the repo (for board logging). */
     mutated?: boolean;
     /** Path the worker touched, for an advisory claim / board post. */
@@ -30,7 +35,8 @@ function resolveInRepo(repoRoot: string, input: string): string {
     const abs = path.isAbsolute(input) ? input : path.join(repoRoot, input);
     const full = path.resolve(abs);
     const root = path.resolve(repoRoot);
-    if (full.toLowerCase() !== root.toLowerCase() && !full.toLowerCase().startsWith(root.toLowerCase() + path.sep.toLowerCase())) {
+    const relative = path.relative(root, full);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         throw new Error(`path is outside the repo root: ${input}`);
     }
     return full;
@@ -151,24 +157,32 @@ function proposeDiffTool(repoRoot: string, args: Record<string, unknown>): Worke
 
 // ── Mutating tools (clanker autonomy only) ───────────────────────────────────
 
-function writeFileTool(repoRoot: string, args: Record<string, unknown>): WorkerToolResult {
-    const full = resolveInRepo(repoRoot, String(args.path ?? ''));
+function authorize(ctx: WorkerToolContext, full: string): string {
+    const target = rel(ctx.repoRoot, full);
+    ctx.authorizeMutation?.(target);
+    return target;
+}
+
+function writeFileTool(ctx: WorkerToolContext, args: Record<string, unknown>): WorkerToolResult {
+    const full = resolveInRepo(ctx.repoRoot, String(args.path ?? ''));
+    const target = authorize(ctx, full);
     const content = String(args.content ?? '');
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, 'utf8');
-    return { result: `WROTE ${rel(repoRoot, full)} (${content.length} bytes)`, mutated: true, touched: rel(repoRoot, full) };
+    return { result: `WROTE ${target} (${content.length} bytes)`, ok: true, mutated: true, touched: target };
 }
 
-function replaceInFileTool(repoRoot: string, args: Record<string, unknown>): WorkerToolResult {
-    const full = resolveInRepo(repoRoot, String(args.path ?? ''));
+function replaceInFileTool(ctx: WorkerToolContext, args: Record<string, unknown>): WorkerToolResult {
+    const full = resolveInRepo(ctx.repoRoot, String(args.path ?? ''));
     const search = String(args.search ?? '');
     const replace = String(args.replace ?? '');
     if (!search) { throw new Error('replace_in_file requires a non-empty search string'); }
     const before = fs.readFileSync(full, 'utf8');
     if (!before.includes(search)) { throw new Error('search string not found in file'); }
+    const target = authorize(ctx, full);
     const after = before.split(search).join(replace);
     fs.writeFileSync(full, after, 'utf8');
-    return { result: `REPLACED in ${rel(repoRoot, full)} (${before.length}→${after.length} bytes)`, mutated: true, touched: rel(repoRoot, full) };
+    return { result: `REPLACED in ${target} (${before.length}→${after.length} bytes)`, ok: true, mutated: true, touched: target };
 }
 
 /** Kill a worker child and its descendants (cmd.exe → npm → node can orphan on win32). */
@@ -183,16 +197,17 @@ function killTree(pid: number | undefined): void {
     } catch { /* ignore */ }
 }
 
-function runCommandTool(repoRoot: string, args: Record<string, unknown>): Promise<WorkerToolResult> {
+function runCommandTool(ctx: WorkerToolContext, args: Record<string, unknown>): Promise<WorkerToolResult> {
     const command = String(args.command ?? '');
     const cmdArgs = Array.isArray(args.args) ? args.args.map(String) : [];
     const timeoutMs = Number(args.timeout_ms ?? 30_000);
-    const cwd = args.cwd ? resolveInRepo(repoRoot, String(args.cwd)) : repoRoot;
+    const cwd = args.cwd ? resolveInRepo(ctx.repoRoot, String(args.cwd)) : ctx.repoRoot;
 
     const guard = guardWorkerCommand(command, cmdArgs);
     if (!guard.ok) {
-        return Promise.resolve({ result: `REFUSED: ${guard.reason}` });
+        return Promise.resolve({ result: `REFUSED [kind=policy_refusal]: ${guard.reason}`, ok: false, errorKind: 'policy_refusal' });
     }
+    authorize(ctx, cwd);
 
     // Windows: shell builtins (mkdir) and .cmd shims (npm/npx/tsc/…) can't be
     // launched with shell:false. Route the allowlisted set through cmd.exe /c.
@@ -211,7 +226,7 @@ function runCommandTool(repoRoot: string, args: Record<string, unknown>): Promis
         try {
             child = spawn(program, spawnArgs, { cwd, shell: false });
         } catch (err) {
-            resolve({ result: `spawn error: ${err instanceof Error ? err.message : String(err)}` });
+            resolve({ result: `ERROR [kind=spawn_error]: ${err instanceof Error ? err.message : String(err)}`, ok: false, errorKind: 'spawn_error' });
             return;
         }
         const timer = setTimeout(() => { done = true; killTree(child.pid); }, timeoutMs);
@@ -219,14 +234,17 @@ function runCommandTool(repoRoot: string, args: Record<string, unknown>): Promis
         child.stderr?.on('data', (c: Buffer) => { stderr += c.toString(); });
         child.on('error', (err) => {
             clearTimeout(timer);
-            resolve({ result: `spawn error: ${err.message}`, mutated: true });
+            resolve({ result: `ERROR [kind=spawn_error]: ${err.message}`, ok: false, errorKind: 'spawn_error' });
         });
         child.on('close', (code) => {
             clearTimeout(timer);
             let out = stdout.slice(0, MAX_EXEC_OUTPUT);
             if (stderr) { out += `\n[stderr]\n${stderr.slice(0, MAX_EXEC_OUTPUT)}`; }
             out += done ? `\n[timed out after ${timeoutMs}ms]` : `\n[exit code: ${code ?? 'null'}]`;
-            resolve({ result: out, mutated: true });
+            const ok = !done && code === 0;
+            const errorKind = done ? 'timeout' : ok ? undefined : 'nonzero_exit';
+            const prefix = errorKind ? `ERROR [kind=${errorKind}]\n` : '';
+            resolve({ result: prefix + out, ok, ...(errorKind ? { errorKind } : {}), mutated: true, touched: rel(ctx.repoRoot, cwd) });
         });
     });
 }
@@ -268,20 +286,24 @@ export async function executeWorkerTool(name: string, args: Record<string, unkno
         // Defense in depth: mutating tools never run in draft mode even if the
         // model somehow calls one.
         if (MUTATING_TOOLS.has(name) && ctx.autonomy !== 'clanker') {
-            return { result: `REFUSED: ${name} is disabled in draft mode — use propose_diff so the orchestrator can review and apply.` };
+            return { result: `REFUSED [kind=permission]: ${name} is disabled in draft mode — use propose_diff so the orchestrator can review and apply.`, ok: false, errorKind: 'permission' };
         }
         switch (name) {
             case 'read_file': return readFileTool(ctx.repoRoot, args);
             case 'list_directory': return listDirectoryTool(ctx.repoRoot, args);
             case 'search_code': return searchCodeTool(ctx.repoRoot, args);
             case 'propose_diff': return proposeDiffTool(ctx.repoRoot, args);
-            case 'write_file': return writeFileTool(ctx.repoRoot, args);
-            case 'replace_in_file': return replaceInFileTool(ctx.repoRoot, args);
-            case 'run_command': return await runCommandTool(ctx.repoRoot, args);
-            default: return { result: `unknown tool: ${name}` };
+            case 'write_file': return writeFileTool(ctx, args);
+            case 'replace_in_file': return replaceInFileTool(ctx, args);
+            case 'run_command': return await runCommandTool(ctx, args);
+            default: return { result: `ERROR [kind=unknown_tool]: ${name}`, ok: false, errorKind: 'unknown_tool' };
         }
     } catch (err) {
-        return { result: `ERROR (${name}): ${err instanceof Error ? err.message : String(err)}` };
+        const message = err instanceof Error ? err.message : String(err);
+        const errorKind = /outside the repo root/i.test(message) ? 'invalid_path'
+            : /claim|held by|conflict/i.test(message) ? 'claim_conflict'
+                : 'tool_error';
+        return { result: `ERROR [kind=${errorKind}] (${name}): ${message}`, ok: false, errorKind };
     }
 }
 

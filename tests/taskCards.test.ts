@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Bridge } from '../src/bridge';
 import { executeBoardTool } from '../src/boardTools';
+import { createSubagentRun } from '../src/subagentRuns';
 import { DEFAULT_SUBAGENT_BACKENDS } from '../src/subagent';
 
 function tempRepo(): string {
@@ -143,4 +144,12 @@ test('get_status reports open tasks but omits done/cancelled ones', async () => 
     assert.match(status, /Still open/);
     assert.doesNotMatch(status, /Already done/);
     void open;
+});
+
+test('get_subagent_run returns durable async lifecycle state', async () => {
+    const bridge = new Bridge(tempRepo());
+    createSubagentRun(bridge.getRepoRoot(), { runId: 'sa_board_1', worker: 'worker-1:m', model: 'm' });
+    const result = await executeBoardTool(bridge, DEFAULT_SUBAGENT_BACKENDS, 'get_subagent_run', { agent: 'claude', run_id: 'sa_board_1' });
+    assert.match(result, /"state":"accepted"/);
+    assert.match(result, /"runId":"sa_board_1"/);
 });

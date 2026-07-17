@@ -39,6 +39,17 @@ test('Windows .cmd npm shim resolves to Node plus the installed Codex JS entry',
     assert.deepEqual(result, { executable: NODE, argsPrefix: [script], shell: false });
 });
 
+test('Windows extension host resolves the user npm Codex entry when PATH has no shim', () => {
+    const appData = 'C:\\Users\\me\\AppData\\Roaming';
+    const script = `${appData}\\npm\\node_modules\\@openai\\codex\\bin\\codex.js`;
+    const result = resolveCodexExecutable({
+        platform: 'win32', nodeExecutable: NODE, appData,
+        where: () => [],
+        existsSync: candidate => path.win32.normalize(candidate) === path.win32.normalize(script),
+    });
+    assert.deepEqual(result, { executable: NODE, argsPrefix: [script], shell: false });
+});
+
 test('configured PowerShell shim uses the same shell-free npm resolution', () => {
     const shim = 'D:\\npm\\codex.ps1';
     const script = 'D:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js';
@@ -66,6 +77,7 @@ test('unresolvable Windows shim fails with an actionable error', () => {
 
 test('PATH lookup failure fails closed instead of falling back to shell', () => {
     assert.throws(() => resolveCodexExecutable({
-        platform: 'win32', nodeExecutable: NODE, where: () => { throw new Error('where denied'); },
+        platform: 'win32', nodeExecutable: NODE, appData: '',
+        where: () => { throw new Error('where denied'); },
     }), /Cannot launch Codex safely/);
 });

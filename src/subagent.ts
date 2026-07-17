@@ -128,6 +128,17 @@ export interface CatalogModelEntry {
     /** Forge `GET /models` marks cloud-provider models `servable:false` — they have
      *  no local port and must be dispatched via Forge's in-host `POST /chat` proxy. */
     servable?: boolean;
+    availability?: 'ready' | 'loadable' | 'loading' | 'busy' | 'degraded' | 'unavailable' | 'unknown';
+    availabilityReason?: string;
+    action?: 'dispatch' | 'ensure' | 'wait' | 'configure' | 'none';
+    route?: 'ensure' | 'chat';
+}
+
+export function catalogAvailability(entry: CatalogModelEntry): NonNullable<CatalogModelEntry['availability']> {
+    if (entry.availability) return entry.availability;
+    if (entry.loaded === true || entry.servable === false) return 'ready';
+    if (entry.loaded === false) return 'loadable';
+    return 'unknown';
 }
 
 /** Resolve a (possibly prefixed) model id to a concrete backend + endpoint. */
@@ -424,10 +435,10 @@ async function fetchModelCatalog(
     }
     const data = await res.json().catch(() => ({})) as {
         data?: Array<{ id?: string; provider?: string; owned_by?: string; backend?: string }>;
-        models?: Array<{ name?: string; provider?: string; backend?: string; loaded?: boolean; servable?: boolean }>;
+        models?: Array<{ name?: string; provider?: string; backend?: string; loaded?: boolean; servable?: boolean; availability?: CatalogModelEntry['availability']; availabilityReason?: string; reason?: string; action?: CatalogModelEntry['action']; route?: CatalogModelEntry['route'] }>;
     };
     const forgeModels = (data.models ?? [])
-        .filter((m): m is { name: string; provider?: string; backend?: string; loaded?: boolean; servable?: boolean } => typeof m.name === 'string' && m.name.length > 0)
+        .filter((m): m is typeof m & { name: string } => typeof m.name === 'string' && m.name.length > 0)
         .map((m) => ({
             name: m.name,
             canonical: canonicalForSource(backend, m.name),
@@ -436,6 +447,10 @@ async function fetchModelCatalog(
             provider: m.provider,
             loaded: m.loaded,
             servable: m.servable,
+            availability: m.availability,
+            availabilityReason: m.availabilityReason ?? m.reason,
+            action: m.action,
+            route: m.route,
         }));
     if (forgeModels.length) { return uniqueEntries(forgeModels); }
 
@@ -550,7 +565,7 @@ export async function fetchForgeCatalog(backends: SubagentBackends): Promise<{ c
 }
 
 export type DispatchRouteDecision =
-    | { kind: 'forge-control'; model: string; canonical: string; note?: string }
+    | { kind: 'forge-control'; model: string; canonical: string; expectedBackend?: string; note?: string }
     | { kind: 'resolved'; resolved: ResolvedModel; canonical: string; note?: string }
     | { kind: 'error'; message: string };
 
@@ -559,6 +574,8 @@ function formatCatalogEntry(entry: CatalogModelEntry): string {
     if (entry.provider) { meta.push(`provider ${entry.provider}`); }
     if (entry.backend) { meta.push(`backend ${entry.backend}`); }
     if (entry.loaded !== undefined) { meta.push(entry.loaded ? 'loaded' : 'not loaded'); }
+    meta.push(`availability ${catalogAvailability(entry)}`);
+    if (entry.availabilityReason) { meta.push(`reason ${entry.availabilityReason}`); }
     return meta.length ? `${entry.canonical} (${meta.join(', ')})` : entry.canonical;
 }
 
@@ -593,6 +610,31 @@ export function decideForgeRoute(
     const { base, profile } = splitProfile(modelName(model).trim());
     if (!base) { return { kind: 'error', message: 'worker model id is empty.' }; }
     const qualified = profile ? `${base}@${profile}` : base;
+    const controlMatches = uniqueEntries((catalog.control.models ?? []).filter(entry => entry.name === base));
+    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === base));
+    const unavailable = (entry: CatalogModelEntry): DispatchRouteDecision | null => {
+        const availability = catalogAvailability(entry);
+        if (availability === 'loading' || availability === 'busy' || availability === 'unavailable') {
+            return { kind: 'error', message: `model "${base}" is ${availability}${entry.availabilityReason ? ` (${entry.availabilityReason})` : ''}; retry after Forge reports it ready or loadable.` };
+        }
+        if (entry.action === 'none' || entry.action === 'configure') {
+            return { kind: 'error', message: `model "${base}" is not dispatchable${entry.availabilityReason ? ` (${entry.availabilityReason})` : ''}.` };
+        }
+        return null;
+    };
+    const controlRoute = (entry: CatalogModelEntry): DispatchRouteDecision => {
+        const blocked = unavailable(entry);
+        if (blocked) return blocked;
+        if (entry.route === 'chat' || entry.servable === false || entry.action === 'dispatch') {
+            return {
+                kind: 'resolved',
+                resolved: { backend: 'forge-chat', model: qualified, baseUrl: backends.forgeControlUrl! },
+                canonical: `forge:${qualified}`,
+                note: ' (cloud via Forge /chat)',
+            };
+        }
+        return { kind: 'forge-control', model: qualified, canonical: `forge:${qualified}`, expectedBackend: entry.backend };
+    };
 
     if (prefix === 'bridge' || prefix === 'ollama' || prefix === 'direct') {
         const resolved = resolveModel(model, backends);
@@ -606,7 +648,10 @@ export function decideForgeRoute(
         if (!backends.forgeControlUrl) {
             return { kind: 'error', message: '"forge:" routing requested but no forgeControlUrl is configured (set forgeRelay.subagentForgeControlUrl / FORGERELAY_FORGE_CONTROL_URL).' };
         }
-        return { kind: 'forge-control', model: qualified, canonical: `forge:${qualified}` };
+        if (controlMatches.length !== 1) {
+            return { kind: 'error', message: controlMatches.length ? `model "${base}" is duplicated in the Forge control catalog.` : `model "${base}" was not found in the current Forge control catalog; refresh list_models before dispatch.` };
+        }
+        return controlRoute(controlMatches[0]);
     }
     if (!backends.forgeControlUrl) {
         const resolved = resolveModel(model, backends);
@@ -617,8 +662,6 @@ export function decideForgeRoute(
         return { kind: 'resolved', resolved, canonical: `${backends.defaultBackend}:${base}` };
     }
 
-    const controlMatches = uniqueEntries((catalog.control.models ?? []).filter(entry => entry.name === base));
-    const bridgeMatches = uniqueEntries((catalog.bridge.models ?? []).filter(entry => entry.name === base));
     const allMatches = [...controlMatches, ...bridgeMatches];
 
     if (allMatches.length > 1) {
@@ -633,18 +676,12 @@ export function decideForgeRoute(
         // route them at Forge's in-host /chat proxy instead. They then flow through
         // the existing kind:'resolved' dispatch path — no /ensure, hold, or slot.
         // The @profile is carried so Forge's /chat applies it (request-time).
-        if (controlMatches[0].servable === false) {
-            return {
-                kind: 'resolved',
-                resolved: { backend: 'forge-chat', model: qualified, baseUrl: backends.forgeControlUrl },
-                canonical: `forge:${qualified}`,
-                note: ' (cloud via Forge /chat)',
-            };
-        }
-        return { kind: 'forge-control', model: qualified, canonical: `forge:${qualified}` };
+        return controlRoute(controlMatches[0]);
     }
 
     if (bridgeMatches.length === 1) {
+        const blocked = unavailable(bridgeMatches[0]);
+        if (blocked) return blocked;
         return {
             kind: 'resolved',
             resolved: {
@@ -963,7 +1000,7 @@ export const DISPATCH_SUBAGENT_TOOL = {
     name: 'dispatch_subagent',
     description:
         'Delegate a self-contained task to a worker, like a Task subagent. '
-        + 'Returns the worker result and posts its lifecycle to the Forge Relay board as worker:<model>. '
+        + 'Sync returns the terminal worker result. Async returns a structured acceptance receipt with runId; call get_subagent_run for durable terminal state. '
         + 'Workers can be local models (pass a plain Forge-exposed model name, or an explicit "forge:", "bridge:", "ollama:", "direct:" override) '
         + 'or the Codex CLI: model "codex" (or "codex:<model>" to pick a Codex model) runs the task via `codex exec` in the repo, '
         + 'sandboxed by board autonomy (draft = read-only, clanker = workspace-write). '
@@ -980,6 +1017,9 @@ export const DISPATCH_SUBAGENT_TOOL = {
             tools: { type: 'string', enum: ['none', 'readonly', 'full'], description: 'Worker capability tier: none=reasoning only; readonly=read+propose_diff; full=read/write/edit/run.' },
             mode: { type: 'string', enum: ['sync', 'async'], description: 'sync blocks until done and returns the result inline (use for quick tasks). async returns immediately and the worker runs in the background, posting progress to the board and @mentioning you when finished so you can review (use for long build tasks).' },
             max_tokens: { type: 'integer', minimum: 1, maximum: 131072, description: 'Optional completion-token cap for local/cloud model workers. Tier-1 defaults to 4096.' },
+            max_total_tokens: { type: 'integer', minimum: 1, maximum: 2000000, description: 'Optional cumulative prompt + completion token budget for a multi-round local/cloud worker run.' },
+            token_budget: { type: 'integer', minimum: 1, maximum: 2000000, description: 'Deprecated compatibility alias for max_total_tokens; do not supply both.' },
+            max_steps: { type: 'integer', minimum: 1, maximum: 100, description: 'Optional maximum agentic tool rounds. Exhaustion is reported distinctly from success.' },
         },
         required: ['agent', 'model', 'task'],
     },

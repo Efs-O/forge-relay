@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { systemPrompt } from '../src/subagentLoop';
+import { gitCheckpoint, systemPrompt } from '../src/subagentLoop';
 
 // Locks the worker-prompt invariant: every worker dispatch sends a non-empty
 // system message as messages[0], for BOTH autonomy modes. Any OpenAI-compatible
@@ -22,4 +22,18 @@ test('systemPrompt differs between draft and clanker (capability line present)',
     assert.notEqual(draft, clanker);
     assert.match(draft, /DRAFT mode/);
     assert.match(clanker, /write, edit, and run/);
+});
+
+test('systemPrompt exposes the platform and shell-free argv contract', () => {
+    const prompt = systemPrompt('clanker', 'C:\\workspace\\forge-relay');
+    assert.match(prompt, /repo_root=C:\\workspace\\forge-relay/);
+    assert.match(prompt, new RegExp(`platform=${process.platform}`));
+    assert.match(prompt, /executable-plus-argv/);
+    assert.match(prompt, /no shell operators/);
+});
+
+test('git checkpoint never recommends repository-wide restore', () => {
+    const checkpoint = gitCheckpoint(process.cwd());
+    assert.doesNotMatch(checkpoint, /git restore \.|reset --hard|git clean/i);
+    assert.match(checkpoint, /restore only worker-owned paths/i);
 });

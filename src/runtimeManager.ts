@@ -11,7 +11,7 @@ import { CodexRuntimeLease } from './codexRuntimeLease';
 import { resolveCodexExecutable } from './codexExecutable';
 import {
     CodexManagedProfile,
-    codexManagedIsolationOverrides,
+    codexManagedRuntimeOverrides,
     managedCodexEnvironment,
 } from './codexManagedProfile';
 
@@ -160,7 +160,7 @@ export class RuntimeManager {
                         // Keep both database state and persisted credentials inside
                         // the Relay-owned profile even when a repository requests a
                         // shared sqlite path or operating-system credential store.
-                        ...codexManagedIsolationOverrides(managedProfile),
+                        ...codexManagedRuntimeOverrides(managedProfile),
                         'mcp_servers.forgerelay': {
                             command: nodeExecutable,
                             args: [opts.mcpStdioPath, '--repoRoot', opts.repoRoot],
@@ -196,6 +196,7 @@ export class RuntimeManager {
                 clientFactory: createAdapter,
                 lease,
                 model: opts.codexManagedModel,
+                acceptanceCommand: nodeExecutable,
                 turnTimeoutMs: opts.codexManagedTurnTimeoutMs,
                 onLog: opts.onLog,
                 onStatus: () => this.emit(),
@@ -253,6 +254,13 @@ export class RuntimeManager {
             codexMode: this.codexMode,
             managedCodexAvailable: this.codexManaged !== null,
         };
+    }
+
+    async runManagedCodexAcceptanceProbe(): Promise<void> {
+        if (!this.codexManaged) {
+            throw new Error('Managed Codex is disabled. Enable forgeRelay.experimentalManagedCodex first.');
+        }
+        await this.codexManaged.runClankerAcceptanceProbe(undefined, true);
     }
 
     getRoster(): SessionRoster {

@@ -17,6 +17,14 @@ import { resolveForgeControlUrl } from './forgeControlDiscovery';
 import { probeCodexAppServers } from './codexProcessProbe';
 import { CodexManagedProfile, ensureCodexManagedProfile } from './codexManagedProfile';
 import { configureManagedCodexSubscription } from './codexManagedAuth';
+import {
+    buildCodexMcpConfigBlock,
+    configureCodexMcpConfig,
+    inspectCodexMcpApprovals,
+    CodexMcpConfigResult,
+} from './codexMcpConfig';
+import { executeBoardTool } from './boardTools';
+import { formatRuntimeAcceptanceReport, runRuntimeAcceptanceMatrix } from './runtimeAcceptance';
 
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
@@ -268,6 +276,91 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             await vscode.window.showTextDocument(doc);
         }),
 
+        vscode.commands.registerCommand('forgeRelay.runRuntimeAcceptance', async () => {
+            const proceed = await vscode.window.showWarningMessage(
+                'This matrix exercises the live board, Forge catalog, managed Codex native-write gate, and two Codex subscription worker turns (sync and async).',
+                { modal: true },
+                'Run acceptance',
+            );
+            if (proceed !== 'Run acceptance') return;
+            const results = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Running Forge Relay runtime acceptance matrix...',
+                cancellable: false,
+            }, async progress => runRuntimeAcceptanceMatrix([
+                {
+                    name: 'Board claim and release',
+                    run: async () => {
+                        progress.report({ message: 'board claim/release' });
+                        const target = `.forge-relay-board-acceptance-${Date.now()}.tmp`;
+                        await executeBoardTool(bridge, subagentBackends, 'claim', { agent: 'acceptance', targets: [target], note: 'Runtime acceptance' });
+                        await executeBoardTool(bridge, subagentBackends, 'release', { agent: 'acceptance', targets: [target], note: 'Runtime acceptance passed' });
+                        return 'claim and release passed';
+                    },
+                },
+                {
+                    name: 'Forge-routed model catalog',
+                    run: async () => {
+                        progress.report({ message: 'Forge model catalog' });
+                        const catalog = await executeBoardTool(bridge, subagentBackends, 'list_models', { agent: 'acceptance' });
+                        if (!subagentBackends.forgeControlUrl || !/forge/i.test(catalog)) throw new Error(`Forge route unavailable: ${catalog.slice(0, 500)}`);
+                        return `Forge route discovered at ${subagentBackends.forgeControlUrl}`;
+                    },
+                },
+                {
+                    name: 'Managed Clanker native workspace write',
+                    run: async () => {
+                        progress.report({ message: 'managed native write gate' });
+                        await rm.runManagedCodexAcceptanceProbe();
+                        return 'create/update/read/delete passed under the Relay permission profile';
+                    },
+                },
+                {
+                    name: 'Codex worker synchronous command/read',
+                    run: async () => {
+                        progress.report({ message: 'Codex sync worker' });
+                        const result = await executeBoardTool(bridge, subagentBackends, 'dispatch_subagent', {
+                            agent: 'acceptance', model: 'codex', mode: 'sync', tools: 'readonly', max_steps: 4,
+                            task: 'Acceptance probe only: read package.json, run a non-mutating command that prints the current directory, then reply exactly FORGE_RELAY_SYNC_ACCEPTANCE_PASSED followed by the package version.',
+                        });
+                        if (!/COMPLETED[\s\S]*FORGE_RELAY_SYNC_ACCEPTANCE_PASSED/i.test(result)) throw new Error(result.slice(0, 1_000));
+                        return 'Codex worker read and native command passed';
+                    },
+                },
+                {
+                    name: 'Codex worker asynchronous lifecycle',
+                    run: async () => {
+                        progress.report({ message: 'Codex async lifecycle' });
+                        const receiptText = await executeBoardTool(bridge, subagentBackends, 'dispatch_subagent', {
+                            agent: 'acceptance', model: 'codex', mode: 'async', tools: 'readonly', max_steps: 2,
+                            task: 'Acceptance probe only: reply exactly FORGE_RELAY_ASYNC_ACCEPTANCE_PASSED. Do not modify files.',
+                        });
+                        const receipt = JSON.parse(receiptText) as { runId?: string; state?: string };
+                        if (!receipt.runId || receipt.state !== 'accepted') throw new Error(`Malformed async receipt: ${receiptText}`);
+                        const deadline = Date.now() + 300_000;
+                        while (Date.now() < deadline) {
+                            const statusText = await executeBoardTool(bridge, subagentBackends, 'get_subagent_run', { agent: 'acceptance', run_id: receipt.runId });
+                            const status = JSON.parse(statusText) as { state?: string; detail?: string };
+                            if (status.state === 'succeeded') {
+                                if (!/FORGE_RELAY_ASYNC_ACCEPTANCE_PASSED/.test(status.detail ?? '')) throw new Error(`Async marker missing: ${statusText}`);
+                                return `accepted -> running -> succeeded (${receipt.runId})`;
+                            }
+                            if (['failed', 'aborted', 'exhausted'].includes(status.state ?? '')) throw new Error(statusText);
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+                        throw new Error(`Async worker ${receipt.runId} did not reach a terminal state in 300 seconds.`);
+                    },
+                },
+            ]));
+            const report = formatRuntimeAcceptanceReport(results);
+            const doc = await vscode.workspace.openTextDocument({ content: report, language: 'markdown' });
+            await vscode.window.showTextDocument(doc);
+            const failed = results.filter(result => !result.ok).length;
+            (failed ? vscode.window.showWarningMessage : vscode.window.showInformationMessage)(
+                `Forge Relay acceptance: ${results.length - failed}/${results.length} passed.`,
+            );
+        }),
+
         vscode.commands.registerCommand('forgeRelay.configureCodex', async () => {
             const result = configureCodexMcp(context.extensionUri.fsPath);
             const fwd = toForwardSlashes(result.path);
@@ -515,9 +608,7 @@ function buildMcpConfig(extensionPath: string, repoRoot: string, mcpPort: number
         `## Codex (\`${toForwardSlashes(getCodexConfigPath())}\`)`,
         '',
         '```toml',
-        '[mcp_servers.forgerelay]',
-        'command = "node"',
-        `args = ["${stdioPath}"]`,
+        buildCodexMcpConfigBlock(stdioPath),
         '```',
         '',
         'Codex should resolve the board from the current workspace `cwd` by default.',
@@ -564,6 +655,10 @@ function buildVerifySetupReport(
     const nodeCheck = checkNodeRuntime();
     const stdioExists = fs.existsSync(stdioPath);
     const codexConfig = inspectFile(codexConfigPath, hasCodexForgeRelayConfig);
+    const codexSafeApprovals = inspectFile(codexConfigPath, content => {
+        const result = inspectCodexMcpApprovals(content);
+        return result.missing.length === 0 && result.conflicts.length === 0;
+    });
     const codexHardwiredRepoRoot = inspectFile(codexConfigPath, hasCodexHardwiredRepoRoot);
     const claudeUserConfig = inspectFile(claudePaths.user, hasClaudeForgeRelayConfig);
     const claudeWorkspaceConfig = inspectFile(claudePaths.workspace, hasClaudeForgeRelayConfig);
@@ -583,6 +678,8 @@ function buildVerifySetupReport(
         formatCheck('Node runtime available', nodeCheck.ok, nodeCheck.detail),
         formatCheck('Built MCP stdio bundle exists', stdioExists, toForwardSlashes(stdioPath)),
         formatCheck('Codex config has `forgerelay` entry', codexConfig.hasEntry, describeInspection(codexConfig)),
+        formatCheck('Codex config preapproves all safe Forge Relay lifecycle tools', codexSafeApprovals.hasEntry,
+            describeInspection(codexSafeApprovals)),
         formatCheck('Codex config does not hardwire a global `--repoRoot`', !codexHardwiredRepoRoot.hasEntry, describeInspection(codexHardwiredRepoRoot)),
         formatCheck('At least one checked Claude settings file has `forgerelay` entry', anyClaudeConfigured, summarizeClaudeStatus([claudeUserConfig, claudeWorkspaceConfig, claudeWorkspaceLocalConfig])),
         ...(managed?.enabled ? [
@@ -618,11 +715,7 @@ function getStdioPath(extensionPath: string): string {
     return toForwardSlashes(path.join(extensionPath, 'out', 'mcpStdio.js'));
 }
 
-type CodexConfigResult = {
-    status: 'created' | 'appended' | 'already' | 'error';
-    path: string;
-    detail?: string;
-};
+type CodexConfigResult = CodexMcpConfigResult;
 
 /**
  * Write the `[mcp_servers.forgerelay]` entry into the user's Codex config.toml,
@@ -632,33 +725,7 @@ type CodexConfigResult = {
  * clobbers an existing entry: if one is present we leave it and report `already`.
  */
 function configureCodexMcp(extensionPath: string): CodexConfigResult {
-    const configPath = getCodexConfigPath();
-    const stdioPath = getStdioPath(extensionPath);
-    const block = [
-        '[mcp_servers.forgerelay]',
-        'command = "node"',
-        `args = ["${stdioPath}"]`,
-        '',
-    ].join('\n');
-    try {
-        const dir = path.dirname(configPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        if (!fs.existsSync(configPath)) {
-            fs.writeFileSync(configPath, block, 'utf8');
-            return { status: 'created', path: configPath };
-        }
-        const existing = fs.readFileSync(configPath, 'utf8');
-        if (hasCodexForgeRelayConfig(existing)) {
-            return { status: 'already', path: configPath };
-        }
-        const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : '\n';
-        fs.appendFileSync(configPath, prefix + block, 'utf8');
-        return { status: 'appended', path: configPath };
-    } catch (err) {
-        return { status: 'error', path: configPath, detail: err instanceof Error ? err.message : String(err) };
-    }
+    return configureCodexMcpConfig(getCodexConfigPath(), getStdioPath(extensionPath));
 }
 
 function getCodexConfigPath(): string {

@@ -66,6 +66,9 @@ test('TOML and argv encoding preserve Windows paths, spaces, quotes, and backsla
     assert.equal(args[4], 'mcp_servers.forgerelay.command="node"');
     assert.match(args[6], /^mcp_servers\.forgerelay\.args=\["N:\\\\vs code apps/);
     assert.equal(args.at(-1), 'mcp_servers.forgerelay.required=true');
+    assert.ok(buildCodexAppServerArgs({
+        'permissions.project-edit.filesystem.:workspace_roots': { '.': 'write' },
+    }).includes('permissions.project-edit.filesystem.:workspace_roots={"."="write"}'));
     assert.throws(() => buildCodexAppServerArgs({ 'bad key': true }));
     assert.throws(() => encodeTomlValue(Number.NaN));
 });

@@ -131,7 +131,7 @@ export type ExtensionMessage =
     | { type: 'notice'; message: string }
     | { type: 'sessionState'; session: SessionState }
     | { type: 'runtimeStatus'; runtime: RuntimeStatusSnapshot }
-    | { type: 'forgeModels'; models: Array<{ name: string; profile?: string; servable?: boolean; provider?: string }>; error?: string }
+    | { type: 'forgeModels'; models: Array<{ name: string; profile?: string; servable?: boolean; provider?: string; availability?: string; availabilityReason?: string }>; error?: string }
     | { type: 'autonomyState'; mode: 'draft' | 'clanker' }
     | { type: 'sessionList'; sessions: SessionSummary[] }
     | { type: 'sessionEvents'; id: string; events: BoardEvent[] };

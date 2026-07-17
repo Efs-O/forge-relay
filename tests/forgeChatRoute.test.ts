@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chatCompletion, dispatchSubagentTier1, nextWorkerOrdinal, ResolvedModel, SubagentBackends, workerCompletionPayload } from '../src/subagent';
+import { chatCompletion, DISPATCH_SUBAGENT_TOOL, dispatchSubagentTier1, nextWorkerOrdinal, ResolvedModel, SubagentBackends, workerCompletionPayload } from '../src/subagent';
 import { runWorkerLoop } from '../src/subagentLoop';
 import { WorkerToolContext } from '../src/workerTools';
 
@@ -70,14 +70,13 @@ test('workerCompletionPayload only changes thinking for llama.cpp backends', () 
     assert.deepEqual(workerCompletionPayload(cloud, { messages: [] }), { messages: [] });
 });
 
-test('runWorkerLoop surfaces an ERROR on empty content + finish_reason length (F1)', async () => {
+test('runWorkerLoop classifies empty length-overflow as exhausted (F1)', async () => {
     captureUrl({ choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }] });
     const resolved: ResolvedModel = { backend: 'forge-chat', model: 'grok-4', baseUrl: 'http://127.0.0.1:8799' };
     const ctx: WorkerToolContext = { repoRoot: process.cwd(), autonomy: 'draft' };
-    await assert.rejects(
-        () => runWorkerLoop(resolved, ctx, 'do a thing', undefined, { maxSteps: 1 }),
-        /token limit|length overflow/i,
-    );
+    const result = await runWorkerLoop(resolved, ctx, 'do a thing', undefined, { maxSteps: 1 });
+    assert.equal(result.state, 'exhausted');
+    assert.match(result.finalText, /token limit|length overflow/i);
 });
 
 test('runWorkerLoop still completes when content is present (no false F1 trip)', async () => {
@@ -85,7 +84,43 @@ test('runWorkerLoop still completes when content is present (no false F1 trip)',
     const resolved: ResolvedModel = { backend: 'forge-chat', model: 'grok-4', baseUrl: 'http://127.0.0.1:8799' };
     const ctx: WorkerToolContext = { repoRoot: process.cwd(), autonomy: 'draft' };
     const r = await runWorkerLoop(resolved, ctx, 'do a thing', undefined, { maxSteps: 1 });
+    assert.equal(r.state, 'succeeded');
     assert.equal(r.finalText, 'done');
+});
+
+test('runWorkerLoop classifies step and total-token limits as exhausted', async () => {
+    const toolCall = { choices: [{ message: { role: 'assistant', tool_calls: [{ id: '1', function: { name: 'read_file', arguments: '{"path":"package.json"}' } }] } }], usage: { total_tokens: 20 } };
+    captureUrl(toolCall);
+    const resolved: ResolvedModel = { backend: 'forge-chat', model: 'grok-4', baseUrl: 'http://127.0.0.1:8799' };
+    const ctx: WorkerToolContext = { repoRoot: process.cwd(), autonomy: 'draft' };
+    const steps = await runWorkerLoop(resolved, ctx, 'do a thing', undefined, { maxSteps: 1 });
+    assert.equal(steps.state, 'exhausted');
+    const budget = await runWorkerLoop(resolved, ctx, 'do a thing', undefined, { maxSteps: 3, maxTotalTokens: 10 });
+    assert.equal(budget.state, 'exhausted');
+    assert.match(budget.finalText, /token budget/i);
+});
+
+test('dispatch schema keeps per-round, total, compatibility, and step limits distinct', () => {
+    const properties = DISPATCH_SUBAGENT_TOOL.inputSchema.properties;
+    assert.ok(properties.max_tokens);
+    assert.ok(properties.max_total_tokens);
+    assert.match(properties.token_budget.description, /Deprecated compatibility alias/);
+    assert.ok(properties.max_steps);
+});
+
+test('runWorkerLoop classifies an unrecovered terminal tool failure as failed', async () => {
+    const responses = [
+        { choices: [{ message: { role: 'assistant', tool_calls: [{ id: 'bad', function: { name: 'unknown_tool', arguments: '{}' } }] } }] },
+        { choices: [{ message: { role: 'assistant', content: 'I could not complete the requested mutation.' }, finish_reason: 'stop' }] },
+    ];
+    globalThis.fetch = (async () => new Response(JSON.stringify(responses.shift()), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+    const resolved: ResolvedModel = { backend: 'forge-chat', model: 'grok-4', baseUrl: 'http://127.0.0.1:8799' };
+    const ctx: WorkerToolContext = { repoRoot: process.cwd(), autonomy: 'draft' };
+    const result = await runWorkerLoop(resolved, ctx, 'do a thing', undefined, { maxSteps: 2 });
+    assert.equal(result.state, 'failed');
+    assert.match(result.finalText, /unknown[_ ]tool/i);
 });
 
 test('chatCompletion errors on empty content + finish_reason length (F1 Tier-1)', async () => {

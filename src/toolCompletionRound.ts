@@ -19,9 +19,9 @@ export interface ToolCompletionRoundOptions {
     messages: Array<Record<string, unknown>>;
     complete: () => Promise<CompletionResponse>;
     executeTool: (name: string, args: Record<string, unknown>) => Promise<string>;
-    beforeTool?: () => void | Promise<void>;
+    beforeTool?: (name: string, args: Record<string, unknown>) => void | Promise<void>;
     onResponse?: (response: CompletionResponse) => void;
-    onToolCall?: (name: string, result: string) => void;
+    onToolCall?: (name: string, args: Record<string, unknown>, result: string) => void;
     maxToolResultChars?: number;
     missingMessageError?: string;
     missingMessageText?: string;
@@ -54,12 +54,12 @@ export async function runToolCompletionRound(opts: ToolCompletionRoundOptions): 
 
     opts.messages.push({ role: 'assistant', content: message.content ?? '', tool_calls: message.tool_calls });
     for (const call of calls) {
-        await opts.beforeTool?.();
         const name = call.function?.name ?? '';
         let args: Record<string, unknown> = {};
         try { args = JSON.parse(call.function?.arguments || '{}'); } catch { /* executor returns the useful error */ }
+        await opts.beforeTool?.(name, args);
         const result = await opts.executeTool(name, args);
-        opts.onToolCall?.(name, result);
+        opts.onToolCall?.(name, args, result);
         opts.messages.push({
             role: 'tool',
             tool_call_id: call.id ?? name,
