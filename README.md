@@ -176,12 +176,14 @@ Relay also pins the managed process to file-backed credentials and its isolated
 SQLite path, so project-level Codex configuration cannot redirect either into a
 shared keyring or database.
 
-Before first use, run **Forge Relay: Sign In Isolated Codex with ChatGPT**. The
-command opens Codex app-server's official browser OAuth flow for this workspace's
-isolated profile. Codex owns token storage and refresh; Forge Relay never copies
-or reads the normal profile's credentials. Managed requests use the ChatGPT
-Codex subscription and its limits—no OpenAI Platform API key is required or
-accepted by this path.
+When **Start Session** finds that the isolated profile is not authenticated, it
+offers **Sign in with ChatGPT**, opens Codex app-server's official browser OAuth
+flow, and retries the session automatically after successful login. The same
+flow is also available manually through **Forge Relay: Sign In Isolated Codex
+with ChatGPT**. Codex owns token storage and refresh; Forge Relay never copies or
+reads the normal profile's credentials. Managed requests use the ChatGPT Codex
+subscription and its limits—no OpenAI Platform API key is required or accepted
+by this path.
 
 This remains experimental because historical Codex builds occasionally reported
 OAuth refresh-token invalidation when multiple long-lived clients were active.

@@ -4,6 +4,15 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.8.1 (Experimental)
+
+- Improved managed-Codex startup UI: when the isolated profile is not yet
+  authenticated, **Start Session** now offers **Sign in with ChatGPT**, opens
+  the official browser flow, and retries the requested session automatically.
+- Applied the same flow to both the Forge Relay sidebar and full board window.
+  Cancelling sign-in leaves the session stopped, while unrelated startup errors
+  remain visible and never trigger an authentication prompt.
+
 ## 0.8.0 (Experimental)
 
 - Corrected the managed-Codex authentication architecture to use the official

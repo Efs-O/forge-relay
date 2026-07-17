@@ -239,6 +239,11 @@ Behavior:
 8. Re-read the account and require `type: "chatgpt"`.
 9. Close the temporary app-server and report only bounded non-secret status.
 
+The command remains available directly. In 0.8.1, starting an unauthenticated
+managed session from either Forge Relay webview offers this login flow and
+retries the requested session once after successful authentication. Cancelling
+login leaves the session stopped; unrelated startup errors do not open auth UI.
+
 Connect choices remain:
 
 - **Use my existing Codex session (recommended)**
@@ -335,6 +340,9 @@ that the subscription requirement is met.
 - `forge-relay-subscription-codex-experimental-0.8.0.vsix` was inspected and
   installed as `efsoo.forge-relay@0.8.0`. SHA-256:
   `be0dd26f7f27594f703aa6c9b78386e00c54bcaba0b296ad728d3bce52833591`.
+- The 0.8.1 automatic sign-in recovery passes all 188 tests and the production
+  build. Its inspected VSIX is installed as `efsoo.forge-relay@0.8.1` with
+  SHA-256 `7a190816652c44bde0be2f8f47d9a1e93ad36f78928052d1bac639a2d6c5e7d0`.
 
 ### Corrected evidence still required before merge
 
