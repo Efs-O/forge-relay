@@ -83,9 +83,14 @@ branch. The merged tree passes TypeScript, all 219 tests, the production build,
 and VSIX inspection. The archive is installed as `efsoo.forge-relay@0.8.3` and
 has SHA-256
 `572DD52FE304167B9230799589538306A2BF0365992990B7C088AE9A14B07346`.
-The running VS Code windows predate that installation, so exact-artifact live
-acceptance remains pending a reload; installation alone is not counted as an
-acceptance pass.
+After reloading, exact-artifact acceptance confirmed the Relay-owned managed
+app-server, canonical native create/update/read/delete startup gate, active MCP
+tool elicitation path, board claim/release, 49-model Forge catalog, synchronous
+Codex worker with the expected 0.8.3 marker, durable asynchronous worker, and a
+clean final board. The managed runtime remained alive while both workers ran
+and processed different-agent board events. Remaining merge gates are the
+second managed workspace, operator STOP/restart isolation, explicit plan-type
+record, and token-refresh soak.
 
 ## Published
 
