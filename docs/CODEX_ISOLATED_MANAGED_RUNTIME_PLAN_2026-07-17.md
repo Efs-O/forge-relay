@@ -382,8 +382,12 @@ that the subscription requirement is met.
   state, maps, or credential files. It is installed as
   `efsoo.forge-relay@0.8.3`; SHA-256:
   `572DD52FE304167B9230799589538306A2BF0365992990B7C088AE9A14B07346`.
-  Existing VS Code processes predate installation, so this candidate has not
-  yet received an exact-artifact live acceptance pass.
+- After a VS Code reload, the exact 0.8.3 candidate passed the managed native
+  create/update/read/delete startup gate, active Forge Relay MCP elicitation,
+  board claim/release, 49-model Forge catalog, synchronous subscription-backed
+  Codex worker with the expected 0.8.3 marker, durable asynchronous worker, and
+  clean board-state checks. The managed app-server remained alive and handled
+  different-agent board events while both workers completed.
 
 ### Corrected evidence still required before merge
 
@@ -395,10 +399,10 @@ that the subscription requirement is met.
 
 ### Next-session resume point
 
-Start from installed R3 and the successful managed-write plus sync/async worker
-evidence. Do not rework login, PID isolation, permission encoding, executable
-discovery, or MCP elicitation unless new evidence regresses those paths.
-Continue with second-workspace concurrency, STOP/restart isolation, then
+Start from installed 0.8.3-rc1 and its successful managed-write plus sync/async
+worker evidence. Do not rework login, PID isolation, permission encoding,
+executable discovery, or MCP elicitation unless new evidence regresses those
+paths. Continue with second-workspace concurrency, STOP/restart isolation, then
 token-refresh soak. Separately normalize or document the worker `0.144.2` versus
-managed/terminal `0.144.4` resolution. Keep board mode off unless the operator
-explicitly activates it in the new session.
+managed/terminal `0.144.4` resolution. Keep board mode off in a new session
+unless the operator explicitly activates it there.
