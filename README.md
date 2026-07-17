@@ -431,4 +431,5 @@ Maintained by [Efs-O](https://github.com/Efs-O) — amandoulou@yahoo.gr
 - [x] Build hook wrapper (`run_build`: pre-flight, configured claims, result post, and cleanup)
 - [x] Task cards with blocker state and severity tags
 - [x] VS Code Marketplace publish ([Efsoo.forge-relay](https://marketplace.visualstudio.com/items?itemName=Efsoo.forge-relay), v0.5.1)
+- [x] Stable v0.5.2 VSIX built and validated locally (Marketplace publication pending)
 - [ ] Session snapshots - Markdown export of the current split and open blockers (FR-4; explicitly deferred)

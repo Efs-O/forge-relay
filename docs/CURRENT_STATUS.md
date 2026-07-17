@@ -78,7 +78,7 @@ and all 219 automated tests pass. The repo-only implementation and remaining
 installed/upstream gates are recorded in
 `docs/FORGE_RELAY_PIPELINE_REMEDIATION_PLAN_2026-07-17.md`.
 
-## Released
+## Published
 
 `Efsoo.forge-relay` version 0.5.1 is published on the VS Code Marketplace.
 The repository `main` branch includes the following completed roadmap work:
@@ -89,8 +89,25 @@ The repository `main` branch includes the following completed roadmap work:
 - FR-5: persistent task cards, lifecycle validation, and MCP task tools
 - FR-6: Marketplace publication
 
-The 0.5.1 release passed TypeScript type-checking, all 132 automated tests,
-and VSIX packaging.
+The Marketplace remains on 0.5.1.
+
+## Stable 0.5.2 candidate
+
+`main` now contains the Gemma/llama.cpp worker reasoning-overflow fix and a
+test-runner cleanup that prevents stale bundles surviving branch switches.
+Commit `3019566` packages this as `forge-relay-0.5.2.vsix`; it passed
+type-checking, the production build, all 129 tests on `main`, VSIX inspection,
+and a live Gemma 4 26B completion with thinking disabled. Marketplace
+publication is still pending.
+
+## Managed Codex experiment
+
+The exclusive managed-Codex prototype remains separate on
+`feat/managed-codex-relay`. Commit `0a2f4b8` packages it as the local-only
+`forge-relay-managed-codex-experimental-0.6.0.vsix`. It includes the 0.5.2
+fixes and passed type-checking, production build, all 171 feature-branch tests,
+and VSIX inspection. It is opt-in, fails closed around shared ownership, and is
+not part of stable `main` or the Marketplace release.
 
 ## Deferred
 
