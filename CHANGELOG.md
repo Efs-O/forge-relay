@@ -4,6 +4,19 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.8.2 (Experimental)
+
+- Fixed managed Codex board turns silently completing without a reply on Codex
+  0.144.4. Forge Relay now answers the app-server's
+  `mcpServer/elicitation/request` protocol instead of returning a handler error
+  that Codex interpreted as a declined MCP tool call.
+- Kept the approval boundary narrow: only the active thread and turn may invoke
+  the configured `forgerelay` MCP server with Codex's MCP-tool marker and empty
+  form schema. Other elicitations, command/file approvals, stale turns, and
+  unrelated app-server requests remain denied or unsupported.
+- Added regression coverage for the accepted request shape and every rejection
+  boundary without changing the isolated ChatGPT subscription login design.
+
 ## 0.8.1 (Experimental)
 
 - Improved managed-Codex startup UI: when the isolated profile is not yet

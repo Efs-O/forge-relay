@@ -9,6 +9,7 @@ import {
     CodexManagedBoard,
     CodexManagedLease,
     classifyCodexManagedFailure,
+    resolveManagedCodexServerRequest,
 } from '../src/codexManagedBridge';
 import { BoardEvent, Command } from '../src/types';
 
@@ -283,6 +284,81 @@ test('fatal authentication and same-profile ownership failures release without r
     assert.equal(held.bridge.status(), 'stopped');
     assert.match(held.bridge.detailText(), /another Forge Relay runtime/);
     assert.doesNotMatch(held.bridge.detailText(), /close other Codex app-server/i);
+});
+
+test('only the active Forge Relay MCP tool elicitation is accepted', () => {
+    const context = { threadId: 'thread-1', turnId: 'turn-1' };
+    const valid = {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        serverName: 'forgerelay',
+        mode: 'form',
+        _meta: { codex_approval_kind: 'mcp_tool_call' },
+        message: 'Allow the Forge Relay MCP tool call?',
+        requestedSchema: { type: 'object', properties: {} },
+    };
+    assert.deepEqual(resolveManagedCodexServerRequest('mcpServer/elicitation/request', valid, context), {
+        response: { action: 'accept', content: {}, _meta: null },
+        audit: 'accepted-forgerelay-mcp',
+    });
+
+    for (const [label, params, requestContext] of [
+        ['wrong server', { ...valid, serverName: 'other' }, context],
+        ['wrong thread', { ...valid, threadId: 'thread-2' }, context],
+        ['wrong turn', { ...valid, turnId: 'turn-2' }, context],
+        ['no active turn', valid, { threadId: 'thread-1' }],
+        ['wrong mode', { ...valid, mode: 'url' }, context],
+        ['missing marker', { ...valid, _meta: {} }, context],
+        ['missing properties', { ...valid, requestedSchema: { type: 'object' } }, context],
+        ['array properties', { ...valid, requestedSchema: { type: 'object', properties: [] } }, context],
+        ['nonempty schema', { ...valid, requestedSchema: { type: 'object', properties: { answer: { type: 'string' } } } }, context],
+    ] as const) {
+        assert.deepEqual(
+            resolveManagedCodexServerRequest('mcpServer/elicitation/request', params, requestContext),
+            {
+                response: { action: 'decline', content: null, _meta: null },
+                audit: 'declined-elicitation',
+            },
+            label,
+        );
+    }
+});
+
+test('bridge accepts MCP elicitation only after turn/start establishes the active turn', async (t) => {
+    const { bridge, clients, eventsPath } = fixture(t);
+    await bridge.start();
+    const client = clients[0];
+    let response: unknown;
+    client.onTurnStart = (turnId, params) => {
+        setTimeout(async () => {
+            response = await client.serverRequest('mcpServer/elicitation/request', {
+                threadId: params.threadId,
+                turnId,
+                serverName: 'forgerelay',
+                mode: 'form',
+                _meta: { codex_approval_kind: 'mcp_tool_call' },
+                message: 'Allow the Forge Relay MCP tool call?',
+                requestedSchema: { type: 'object', properties: {} },
+            });
+            client.emit('item/started', {
+                threadId: params.threadId,
+                turnId,
+                item: { type: 'mcpToolCall', server: 'forgerelay', tool: 'post' },
+            });
+            client.emit('turn/completed', { threadId: params.threadId, turnId });
+        }, 1);
+    };
+    append(eventsPath, event('user', 'respond through Forge Relay'));
+    await bridge.pollEventsNow();
+    await waitFor(() => response !== undefined, 'MCP elicitation response');
+    assert.deepEqual(response, { action: 'accept', content: {}, _meta: null });
+});
+
+test('unrelated app-server requests remain unsupported', () => {
+    assert.throws(
+        () => resolveManagedCodexServerRequest('item/tool/requestUserInput', {}, {}),
+        /Unsupported app-server request/,
+    );
 });
 
 test('a transient transport close performs bounded recovery with a new persistent session', async (t) => {

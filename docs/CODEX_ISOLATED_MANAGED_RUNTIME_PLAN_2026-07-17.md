@@ -343,6 +343,16 @@ that the subscription requirement is met.
 - The 0.8.1 automatic sign-in recovery passes all 188 tests and the production
   build. Its inspected VSIX is installed as `efsoo.forge-relay@0.8.1` with
   SHA-256 `7a190816652c44bde0be2f8f47d9a1e93ad36f78928052d1bac639a2d6c5e7d0`.
+- The first authenticated 0.8.1 board-turn attempt exposed a Codex 0.144.4
+  protocol mismatch rather than a login or process-isolation failure. Codex
+  sent `mcpServer/elicitation/request` before its Forge Relay MCP tool call;
+  the bridge treated that method as unsupported, and Codex recorded the tool
+  decision as declined. Version 0.8.2 handles the exact current-turn Forge
+  Relay MCP elicitation while continuing to deny all broader approvals.
+- The 0.8.2 approval-boundary regression passes all 191 tests, TypeScript, and
+  the production build. The inspected VSIX is installed as
+  `efsoo.forge-relay@0.8.2`; SHA-256:
+  `5fc03484e06c4123308f3dca9d8b1a00d3aa1ca7abd27c255060b6f7db6e6320`.
 
 ### Corrected evidence still required before merge
 
