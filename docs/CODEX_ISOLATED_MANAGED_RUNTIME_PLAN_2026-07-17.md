@@ -1,287 +1,253 @@
-# Isolated managed Codex runtime plan
+# Isolated subscription-managed Codex runtime plan
 
 **Date:** 2026-07-17
 
 **Branch:** `feat/managed-codex-relay`
-**Status:** Approved for experimental implementation on this branch; do not merge to `main` until the acceptance gates pass.
 
-## 1. Decision
+**Status:** Revised after the 0.7.0 prototype. ChatGPT Codex subscription usage
+is a hard product requirement. Do not merge to `main` until the subscription
+OAuth and concurrency acceptance gates pass.
 
-Replace the current machine-wide **managed-exclusive** Codex policy with a
-Relay-owned **managed-isolated** runtime.
+## 1. Correction to the 0.7.0 prototype
 
-The product will support two distinct Codex paths:
+The 0.7.0 prototype proved process, workspace, SQLite, lease, and MCP-routing
+isolation, but selected an OpenAI Platform API key as the supported managed
+credential. That changes the billing model and does not satisfy the product
+goal. It is rejected as the final architecture.
 
-1. **Existing Codex session / MCP:** Forge Relay does not own or wake Codex. The
-   user's IDE or CLI session can call the Forge Relay MCP tools.
-2. **Isolated managed Codex:** Forge Relay owns a standalone
-   `codex app-server --listen stdio://` process, one persistent thread, and an
-   isolated local state profile for the current workspace.
+The corrected experiment must:
 
-Other Codex IDE, desktop, CLI, or Relay-managed processes are not startup
-conflicts merely because they exist. Forge Relay never kills an external Codex
-process. It prevents only duplicate Relay ownership of the same isolated
-managed profile.
+- use ChatGPT-managed Codex authentication and subscription limits;
+- never require, request, inherit, or fall back to a Platform API key;
+- keep the ordinary OpenAI sidebar and CLI profiles untouched;
+- retain the isolation and process-ownership improvements proven in 0.7.0;
+- remain experimental until concurrent token refresh is observed safely.
 
 ## 2. Product outcome
 
-The intended simultaneous topology is:
+Forge Relay supports two distinct Codex paths:
+
+1. **Existing Codex session / MCP:** Forge Relay does not own or wake Codex.
+   The user's IDE or CLI session calls Forge Relay MCP tools. This remains the
+   default and stable path.
+2. **Isolated subscription-managed Codex:** Forge Relay owns a standalone
+   `codex app-server --listen stdio://`, one persistent thread, and one
+   workspace-specific local profile authenticated through Codex's official
+   ChatGPT browser OAuth flow.
+
+Target topology:
 
 ```text
 VS Code workspace A
-|- OpenAI Codex sidebar PID (OpenAI-owned state/auth)
-`- Forge Relay managed Codex PID A
-   |- dedicated CODEX_HOME A
-   |- dedicated CODEX_SQLITE_HOME A
+|- OpenAI Codex sidebar PID (ordinary OpenAI-owned profile)
+`- Forge Relay Codex PID A
+   |- isolated CODEX_HOME A (ChatGPT-managed OAuth)
+   |- isolated CODEX_SQLITE_HOME A
    `- workspace-A Forge Relay MCP binding
 
 VS Code workspace B
 |- optional OpenAI Codex sidebar PID
-`- Forge Relay managed Codex PID B
-   |- dedicated CODEX_HOME B
-   |- dedicated CODEX_SQLITE_HOME B
+`- Forge Relay Codex PID B
+   |- isolated CODEX_HOME B (ChatGPT-managed OAuth)
+   |- isolated CODEX_SQLITE_HOME B
    `- workspace-B Forge Relay MCP binding
 
 Terminal
-`- independent codex CLI task
+`- independent Codex CLI session
 ```
 
-With API-key authentication, these processes may share the same OpenAI API key.
-They share billing, quota, and rate limits, but not local app-server ownership,
-stdio, threads, SQLite state, session history, or workspace routing.
+The processes may use the same ChatGPT account and Codex subscription, but do
+not share local auth files, SQLite databases, stdio, threads, session history,
+leases, or workspace routing. Subscription quota and rate limits remain shared
+at the account/workspace level.
 
-Process isolation does not prevent two agents from editing the same worktree.
-Agents working in one repository must still use Forge Relay claims or separate
-Git worktrees.
+Process isolation does not prevent two agents from editing the same files.
+Forge Relay claims or separate Git worktrees are still required for concurrent
+work in one repository.
 
 ## 3. Authentication contract
 
-### 3.1 Supported conflict-free path
+### 3.1 Supported path: app-server-managed ChatGPT OAuth
 
-The first supported managed-isolated authentication path is an OpenAI API key
-provisioned by the Codex CLI into the isolated profile:
+Current Codex app-server documentation exposes this stable auth sequence:
 
 ```text
-CODEX_HOME=<isolated-home> codex login --with-api-key
+initialize
+initialized
+account/read { refreshToken: false }
+account/login/start { type: "chatgpt" }
+open returned authUrl in the browser
+wait for account/login/completed
+account/read -> account.type == "chatgpt"
 ```
 
-Forge Relay will provide an explicit setup command. It may accept the API key
-through a password input and pipe it once to `codex login --with-api-key`.
+Codex owns the browser callback, token persistence, and token refresh. Forge
+Relay sees the login ID, approved OpenAI URL, completion status, auth mode, and
+optional plan type; it never receives or parses access or refresh tokens.
 
 Rules:
 
-- Never place an API key in `config.yaml`, `settings.json`, repository files,
-  command-line arguments, output channels, status text, errors, or telemetry.
-- Do not copy or read the user's normal `~/.codex/auth.json`.
-- Do not mutate the user's normal Codex configuration.
-- Do not retain the plaintext key after the login subprocess completes.
-- Let Codex own its credential persistence and credential-store policy inside
-  the isolated profile.
-- API-key requests are billed through the OpenAI Platform account and share its
-  rate-limit pool.
+- Force `forced_login_method="chatgpt"` for login and managed runtime.
+- Force file-backed credentials inside the isolated `CODEX_HOME`; never use a
+  shared operating-system keyring entry.
+- Remove `OPENAI_API_KEY`, `CODEX_API_KEY`, and `CODEX_ACCESS_TOKEN` from the
+  child environment so they cannot silently replace subscription auth.
+- Accept a managed start only when `account/read` reports `type: "chatgpt"`.
+- Reject API-key, access-token, missing, or unknown auth modes with an
+  actionable ChatGPT sign-in message.
+- Allow browser URLs only on HTTPS OpenAI/ChatGPT hosts.
+- Never copy, read, display, log, or mutate the ordinary `~/.codex/auth.json`.
+- Never put credentials in VS Code settings, `config.yaml`, repository files,
+  command arguments, logs, status text, or telemetry.
 
-### 3.2 Deferred authentication paths
+### 3.2 Explicit non-goals and fallback policy
 
-- Enterprise Codex access-token provisioning.
-- Consumer ChatGPT login in the isolated profile.
-- Shared default `CODEX_HOME` or copied credentials.
+- Platform API-key billing is not an acceptable fallback.
+- Business/Enterprise Codex access tokens are not the consumer subscription
+  path and are not part of this experiment.
+- Copying the ordinary sidebar credential into an isolated home is prohibited.
+- Sharing the sidebar's default `CODEX_HOME` is prohibited.
+- If current ChatGPT OAuth cannot survive the required concurrency/refresh
+  acceptance, managed subscription mode does not ship. The fallback is the
+  existing-session MCP mode until OpenAI provides an attachable existing
+  app-server or another supported subscription automation surface.
 
-Consumer ChatGPT coexistence remains experimental until a run spans an actual
-token refresh without `refresh_token_reused`, invalidation, or recovery loops.
-It is not required for the API-key architecture to pass.
+## 4. Current upstream evidence and unresolved risk
 
-## 4. Isolated profile layout
+The current official `openai/codex` app-server documentation:
 
-Forge Relay derives an upgrade-stable workspace fingerprint from:
+- calls ChatGPT-managed auth the recommended mode;
+- supports `account/login/start` with `type: "chatgpt"` or
+  `chatgptDeviceCode`;
+- reports `planType` for Plus, Pro, Business, and Enterprise logins;
+- states Codex persists and automatically refreshes the tokens;
+- identifies app-server as the integration surface used by rich clients such
+  as the VS Code extension.
 
-- normalized workspace/repository root;
-- local versus remote authority;
-- platform user identity where available.
+Historical Forge Relay runs and open Codex issues observed
+`refresh_token_reused` / `token_invalidated`. A current OpenAI collaborator has
+stated that server-side replay tolerance mitigates ordinary concurrent refresh
+races, while also acknowledging that occasional refresh-reuse reports still
+exist. Therefore process startup success is insufficient: a real concurrent
+refresh/soak test remains a merge gate.
 
-Default layout under the extension's stable global storage:
+## 5. Isolated profile layout
+
+Forge Relay derives an upgrade-stable fingerprint from the normalized
+workspace root, local/remote authority, and platform user identity.
 
 ```text
-<globalStorage>/managed-codex/profiles/<workspace-fingerprint>/
+<extension-global-storage>/managed-codex/profiles/<fingerprint>/
 |- home/
 `- sqlite/
 ```
 
-The managed child receives:
+The login and managed app-server receive:
 
 ```text
 CODEX_HOME=<profile>/home
 CODEX_SQLITE_HOME=<profile>/sqlite
+-c sqlite_home="<profile>/sqlite"
+-c cli_auth_credentials_store="file"
+-c forced_login_method="chatgpt"
 ```
 
-The app-server and login commands must additionally override `sqlite_home` and
-`cli_auth_credentials_store` on their direct argument arrays. Command-line
-configuration takes precedence over project `.codex/config.toml`, preventing a
-repository from redirecting managed SQLite state or credentials into shared
-storage.
+Command-line overrides prevent project `.codex/config.toml` from redirecting
+credentials or SQLite state into shared storage.
 
 Requirements:
 
-- Both directories are outside the repository and VS Code installation.
-- Neither path may resolve to the user's normal Codex home.
-- The directories are created and validated before login or app-server spawn.
-- Different workspaces resolve to different profiles by default.
-- The same workspace resolves to the same profile across reloads/upgrades.
-- No credentials are copied between profiles.
+- paths remain outside the repository, ordinary Codex home, and VS Code install;
+- symlink-resolved paths are checked after creation;
+- same workspace resolves to the same profile across reloads;
+- different workspaces resolve to different profiles;
+- no credential or state file is copied between profiles.
 
-## 5. Runtime ownership and coexistence
+## 6. Runtime ownership and coexistence
 
-### 5.1 Relay lease
+### Relay ownership lease
 
-Retain the atomic machine-local runtime lease, but key and describe it as a
-Relay-managed **profile ownership** lease rather than a credential-wide Codex
-lease.
+The atomic machine-local lease is keyed to the isolated managed profile. It:
 
-The lease must:
+- blocks only a second Forge Relay owner of the exact same profile;
+- allows different workspace profiles concurrently;
+- recovers stale ownership without killing unrelated processes;
+- records operational metadata and non-secret fingerprints only;
+- never takes over a live owner.
 
-- reject a second Forge Relay owner of the same managed profile;
-- allow different workspace profiles concurrently;
-- recover a stale owner without killing unrelated processes;
-- record only operational metadata and non-secret fingerprints;
-- release only after the owned child is stopped;
-- never take over or terminate a live owner.
+### External Codex processes
 
-### 5.2 External process diagnostics
+External app-server discovery remains diagnostic only. Forge Relay reports
+redacted PIDs, never blocks because another Codex process exists, and never
+offers bulk termination.
 
-Retain Codex app-server discovery only as diagnostics:
+### Worker lane
 
-- report detected PIDs without full command lines;
-- distinguish `found`, `clear`, and `unknown` inspection outcomes;
-- never make discovery success, failure, or unknown status a startup gate;
-- never offer automatic bulk termination.
+Short-lived Relay `codex exec` workers remain serialized with one another. The
+isolated managed runtime does not acquire that lifetime semaphore. Subscription
+acceptance must prove whether a normal CLI/worker can coexist safely; if it
+cannot, worker dispatch must be disabled or deferred while managed mode runs.
 
-### 5.3 Worker concurrency
+## 7. Components retained, replaced, and removed
 
-Keep `codex exec` worker serialization between Relay-dispatched workers for now.
-Remove the managed runtime's lifetime acquisition of that semaphore. An
-API-key-authenticated isolated app-server must be able to coexist with an
-independent serialized `codex exec` worker lane.
+Retain:
 
-## 6. Components to retain
+- shell-free Codex executable resolution;
+- private stdio JSON-RPC transport and owned-child tree shutdown;
+- persistent thread, ordered event turns, STOP/PAUSE, approval denial, bounded
+  recovery, and fallback board posting;
+- workspace-specific Forge Relay MCP injection;
+- deterministic profile resolver and profile ownership lease;
+- diagnostics-only external PID discovery;
+- existing-session MCP and serialized worker paths;
+- coordination-directory VS Code-install guards.
 
-- `src/codexAppServerClient.ts`: private stdio JSON-RPC transport, framing,
-  correlation, timeouts, protocol diagnostics, and owned-child shutdown.
-- `src/codexExecutable.ts`: standalone CLI resolution and Windows-safe npm-shim
-  handling.
-- The core of `src/codexManagedBridge.ts`: persistent thread, event ordering,
-  `turn/start`, notification correlation, STOP/PAUSE interruption, approval
-  denial, bounded recovery, and fallback posting.
-- Launch-time workspace-specific `mcp_servers.forgerelay` injection.
-- Existing-session MCP configuration and UI path.
-- `codexWorker.ts` and serialized short-lived worker behavior.
-- The coordination-directory VS Code installation guard at both existing call
-  sites.
+Replace:
 
-## 7. Components to replace or remove
+- API-key subprocess provisioning with app-server ChatGPT browser OAuth;
+- API billing/setup copy with subscription login and quota copy;
+- generic authenticated-account acceptance with strict `chatgpt` mode checking;
+- 0.7.0 package identity with a corrected experimental version.
 
-### Replace
+Remove:
 
-- `managed-exclusive` mode with `managed-isolated`.
-- Default/fallback managed home resolution with deterministic isolated profile
-  resolution.
-- Credential-home lease wording and identity with managed-profile ownership.
-- The exclusive warning modal with an isolation, API billing, and setup notice.
-- Verify Setup's exclusive-process check with profile/auth/process diagnostics.
+- API-key input UI and all `codex login --with-api-key` production code/tests;
+- Platform billing claims and API-key acceptance instructions;
+- inherited API/access-token environment overrides;
+- stale comments saying managed mode holds the worker semaphore;
+- external PID startup blocking and instructions to close other Codex clients;
+- arbitrary `codexManagedHome` and normal-home fallback.
 
-### Remove from production startup
+Persisted `managed-exclusive` values continue to migrate to
+`managed-isolated`; missing or unknown values remain MCP mode.
 
-- External app-server process blocking.
-- Unknown process-probe fail-closed behavior.
-- Instructions to close the OpenAI IDE/desktop Codex session.
-- Managed runtime ownership of `codexExecutionGate`.
-- Any fallback to `process.env.CODEX_HOME` or `~/.codex` for managed mode.
+## 8. Commands and UI
 
-### Persisted-state migration
+Command:
 
-- Normalize saved `managed-exclusive` mode to `managed-isolated`.
-- A failed managed start must not persist or auto-retry a rejected roster.
-- MCP mode remains the default for missing/unknown saved values.
+**Forge Relay: Sign In Isolated Codex with ChatGPT**
 
-## 8. Settings and commands
+Behavior:
 
-Keep:
+1. Resolve/create the isolated workspace profile.
+2. Start a temporary shell-free app-server using the isolated environment.
+3. Initialize and inspect existing auth.
+4. If already `chatgpt`, report the plan without opening a browser.
+5. Otherwise start the official ChatGPT login RPC.
+6. Validate and open the returned OpenAI/ChatGPT HTTPS URL.
+7. Wait with a bounded timeout for the matching completion notification.
+8. Re-read the account and require `type: "chatgpt"`.
+9. Close the temporary app-server and report only bounded non-secret status.
 
-- `forgeRelay.experimentalManagedCodex`
-- `forgeRelay.codexExecutable`
-- `forgeRelay.codexManagedModel`
-- `forgeRelay.codexManagedTurnTimeoutMs`
+Connect choices remain:
 
-Remove or replace:
+- **Use my existing Codex session (recommended)**
+- **Run isolated managed Codex (experimental)**
 
-- `forgeRelay.codexManagedHome` as an arbitrary full home override. An arbitrary
-  path can silently defeat isolation.
+The confirmation explains that another isolated PID starts, existing clients
+remain active, and usage follows the ChatGPT Codex subscription and limits.
 
-Add:
-
-- `Forge Relay: Configure Isolated Managed Codex` command.
-- Optional advanced profile-root setting only if it remains a root under which
-  Forge Relay always appends the workspace fingerprint.
-
-The setup command must:
-
-1. Resolve/create the isolated profile.
-2. Resolve the standalone Codex executable.
-3. Accept the API key without displaying or logging it.
-4. run `codex login --with-api-key` with the isolated environment;
-5. close stdin and clear the in-memory key reference;
-6. report only success/failure and profile path;
-7. never touch the ordinary Codex profile.
-
-## 9. UI behavior
-
-Codex choices:
-
-- **Use my existing Codex session:** current MCP path.
-- **Run isolated managed Codex (experimental):** automatic board participant,
-  separate app-server/profile, Platform API billing.
-
-The managed confirmation explains:
-
-- another Codex PID will be created;
-- existing IDE/CLI Codex sessions remain running;
-- local state is isolated;
-- API usage is separately billed and shares account rate limits;
-- setup must be completed for this workspace profile.
-
-Errors must offer the setup command when the isolated profile is unauthenticated.
-
-## 10. Implementation phases
-
-### Phase 1 - Profile and authentication foundation
-
-- Add deterministic profile resolver and tests.
-- Add API-key login runner and command with dependency-injected tests.
-- Pass both isolated environment variables to the app-server child.
-- Remove normal-home fallback.
-
-Gate: no secret persistence/logging; same/different workspace identity tests
-pass; login subprocess receives the key only through stdin.
-
-### Phase 2 - Runtime coexistence policy
-
-- Remove process probe from bridge startup.
-- Convert probe to diagnostics-only discovery.
-- Re-key/reword lease as managed-profile ownership.
-- Remove managed lifetime execution-gate acquisition.
-
-Gate: external fake app-server does not block; different profiles run
-concurrently; same profile rejects duplicate Relay ownership.
-
-### Phase 3 - Mode, UI, persistence, and verification
-
-- Rename mode and migrate saved state.
-- Update Connect UI, confirmation, status, Verify Setup, README, changelog, and
-  current-status documentation.
-- Ensure failure does not persist the requested roster.
-
-Gate: MCP behavior remains unchanged; old saved values migrate; isolated mode
-is explicit and accurately described.
-
-### Phase 4 - Automated validation
+## 9. Automated validation
 
 Required:
 
@@ -289,99 +255,92 @@ Required:
 npm run typecheck
 npm test
 npm run build
-npm exec -- vsce package --no-dependencies --out <experimental-vsix>
+npx --yes @vscode/vsce package --no-dependencies --out <experimental-vsix>
 ```
 
-Inspect the VSIX as a ZIP and verify:
+Tests must prove:
 
-- expected version/display name/preview flag;
-- managed feature remains opt-in;
-- new command/settings are present;
-- `out/extension.js` and `out/mcpStdio.js` are included;
-- no source tests, fixture servers, credentials, or generated secret files ship.
+- stable/distinct safe profile resolution;
+- forced ChatGPT/file/SQLite overrides;
+- removal of API/access-token environment variables;
+- browser auth request shape, notification correlation, URL allowlist,
+  cancellation, timeout, existing-login fast path, and final account check;
+- managed startup rejects `apiKey`, `personalAccessToken`, missing, and unknown
+  modes and accepts only `chatgpt`;
+- different profiles coexist while same-profile ownership is rejected;
+- external process discovery is informational;
+- mode migration, event ordering, STOP, approval denial, recovery, transport
+  framing, and MCP routing remain green;
+- package contains runtime bundles and no source tests or credentials.
 
-### Phase 5 - Live Windows acceptance
+## 10. Live Windows acceptance
 
-With an externally supplied API key:
+1. Keep the ordinary OpenAI Codex sidebar signed in and active.
+2. Sign the isolated workspace profile in through the new ChatGPT command.
+3. Confirm `account/read` reports `chatgpt` and the expected plan type.
+4. Start managed Codex and complete a real board-event turn/MCP post.
+5. Run an independent subscription-backed terminal Codex task concurrently.
+6. Sign in and start a second workspace profile concurrently.
+7. Confirm all external PIDs remain alive and each managed profile routes only
+   to its own workspace board.
+8. STOP/PAUSE one managed runtime; unrelated Codex clients must survive.
+9. Reload/crash/restart; confirm no orphan, stale lease, or SQLite lock.
+10. Keep sidebar and managed processes active across an actual token refresh
+    window or an explicit safe refresh probe, then complete turns in both.
+11. Inspect logs for `refresh_token_reused`, `token_invalidated`, 401 loops,
+    cross-workspace routing, protocol mismatch, or token/URL leakage.
 
-1. Keep the OpenAI Codex sidebar/app-server active.
-2. Configure the isolated workspace profile.
-3. Start managed Codex and complete a real board-event turn/MCP post.
-4. Run an independent terminal Codex task concurrently.
-5. Start a second isolated workspace profile concurrently.
-6. Confirm all existing external PIDs remain alive.
-7. Confirm each managed process uses its own home/SQLite paths and correct board.
-8. STOP/PAUSE one managed runtime and confirm unrelated Codex processes survive.
-9. Reload/crash/restart and confirm no orphan or stale lease.
-10. Inspect logs for SQLite locks, auth invalidation, cross-workspace routing,
-    protocol mismatch, or leaked secrets.
+Do not deliberately copy or force-refresh the ordinary sidebar credential.
+Refresh validation must use each client's own supported auth path.
 
-An API-key run does not require a ChatGPT token-refresh soak. Consumer ChatGPT
-mode, if later added, does.
+## 11. Merge decision
 
-## 11. Automated test requirements
-
-- Stable and distinct managed profile resolution.
-- Paths remain outside repo and VS Code installation roots.
-- No normal-home fallback or credential copying.
-- Login key enters only child stdin and is absent from args/env/logs/errors.
-- App-server spawn uses `shell: false`, private stdio, correct cwd, both isolated
-  environment paths, and workspace-specific MCP arguments.
-- External PID discovery is informational and redacted.
-- Unknown discovery does not block startup.
-- Two fake app-servers with different profiles run concurrently.
-- Same-profile lease rejects a duplicate Relay owner.
-- Mode switching stops only the owned child and releases its lease.
-- Managed app-server and serialized worker lane can overlap.
-- Event ordering, truncation, partial lines, STOP, approval denial, recovery,
-  timeout, fallback post, and protocol tests remain green.
-- Saved `managed-exclusive` state migrates to `managed-isolated`.
-- No secret appears in status snapshots, setup reports, or packaged output.
-
-## 12. Merge decision
-
-Do not merge to `main` merely because unit tests pass.
+Do not merge merely because unit tests, startup, or one model turn pass.
 
 Merge readiness requires:
 
-- all automated gates and package inspection pass;
-- credentialed live API-key acceptance passes with the sidebar active;
-- at least two workspace profiles coexist without routing/state conflict;
-- no external Codex process is killed or blocked;
-- rollback remains disabling the experimental feature/removing the experimental
-  VSIX, leaving stable MCP behavior unchanged;
+- all automated/build/package gates pass;
+- installed VSIX subscription login and real board turns pass;
+- sidebar, managed runtime, CLI/worker, and two workspace profiles coexist;
+- refresh/soak produces no auth invalidation in any client;
+- no external process is blocked or killed;
+- disabling/removing the experimental VSIX leaves stable MCP behavior intact;
 - the operator reviews the evidence and explicitly approves the merge.
 
-## 13. Validation evidence (2026-07-17)
+If the refresh gate fails, do not add an API-key fallback. Disable managed
+subscription mode and retain existing-session MCP pending upstream support.
 
-Completed on Windows against `codex-cli 0.144.4`:
+## 12. Evidence ledger
 
-- `npm run typecheck`: pass.
-- `npm test`: 181/181 pass.
-- production build and VSIX packaging: pass.
-- packaged contents: runtime bundles present; source/tests and generated test
-  output absent.
-- VSIX installation: `efsoo.forge-relay@0.7.0` installed successfully through
-  the VS Code 1.129 CLI.
-- disposable extension-host activation: pass. The installed bundle activated
-  on `onStartupFinished` in a separate user-data directory and created the
-  temporary workspace coordination state. No activation exception occurred;
-  VS Code emitted only its non-fatal `PendingMigrationError` deprecation warning
-  while loading a bundled validation dependency.
-- isolated stdio protocol smoke: `initialize` and `account/read` pass with no
-  inherited credential variables and with forced isolated SQLite/file auth.
-- real CLI auth persistence smoke: `codex login --with-api-key` accepted a known
-  fake key through stdin, wrote the only secret-containing file to the
-  disposable isolated `CODEX_HOME`, did not echo it, left the ordinary
-  `~/.codex/auth.json` hash unchanged, and exited successfully. The disposable
-  profile was removed without making a model request.
-- coexistence smoke: one pre-existing Codex app-server plus two disposable
-  isolated app-servers were observed concurrently (`1 -> 3 -> 1`); both
-  isolated clients exited cleanly and the pre-existing process remained.
-- experimental VSIX: `forge-relay-isolated-codex-experimental-0.7.0.vsix`.
-  SHA-256: `8BDF788271F1255F83C226DD63140C63213B34E3F36FA2E0C48B8F9B80DA3A46`.
+### Retained evidence from the rejected 0.7.0 prototype
 
-Still required before merging: reload an operator window, provision the isolated
-profile with an operator-supplied Platform API key, and complete the credentialed
-multi-workspace/board-event/STOP acceptance steps in Phase 5. No API key was
-available to the build process, so those steps have not been claimed as passed.
+These results remain valid for non-authentication architecture:
+
+- TypeScript and 181-test baseline passed.
+- Production build, VSIX inspection, and disposable VS Code activation passed.
+- Isolated stdio initialize/account-read passed against `codex-cli 0.144.4`.
+- One existing app-server plus two isolated disposable app-servers coexisted
+  (`1 -> 3 -> 1`) and the existing PID survived.
+- Ordinary `~/.codex/auth.json` was unchanged by disposable profile tests.
+
+The 0.7.0 API-key login smoke proves only path isolation and is not evidence
+that the subscription requirement is met.
+
+### Corrected evidence completed on 2026-07-17
+
+- TypeScript, all 184 automated tests, and the production build passed.
+- A live isolated app-server on `codex-cli 0.144.4` successfully returned a
+  valid official ChatGPT login response and accepted cancellation while two
+  existing app-server processes stayed alive. The auth URL was not logged.
+- `forge-relay-subscription-codex-experimental-0.8.0.vsix` was inspected and
+  installed as `efsoo.forge-relay@0.8.0`. SHA-256:
+  `be0dd26f7f27594f703aa6c9b78386e00c54bcaba0b296ad728d3bce52833591`.
+
+### Corrected evidence still required before merge
+
+- Complete browser login and confirm `account.type == "chatgpt"` plus the
+  returned subscription plan type.
+- Real subscription-backed managed board turn with sidebar active.
+- CLI/worker and second-workspace concurrency.
+- STOP/restart isolation.
+- Token refresh/soak with no invalidation.

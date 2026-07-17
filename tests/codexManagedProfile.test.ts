@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { codexManagedIsolationOverrides, ensureCodexManagedProfile } from '../src/codexManagedProfile';
+import {
+    codexManagedIsolationOverrides,
+    ensureCodexManagedProfile,
+    managedCodexEnvironment,
+} from '../src/codexManagedProfile';
 
 test('managed profile is stable for normalized workspace identity and creates both homes', async t => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'relay-profile-'));
@@ -27,6 +31,13 @@ test('managed profile is stable for normalized workspace identity and creates bo
     assert.deepEqual(codexManagedIsolationOverrides(first), {
         sqlite_home: first.sqliteHome,
         cli_auth_credentials_store: 'file',
+        forced_login_method: 'chatgpt',
+    });
+    assert.deepEqual(managedCodexEnvironment({
+        PATH: '/bin', OPENAI_API_KEY: 'api', CODEX_API_KEY: 'exec', CODEX_ACCESS_TOKEN: 'access',
+        CODEX_HOME: '/ordinary', CODEX_SQLITE_HOME: '/ordinary/sqlite',
+    }, first), {
+        PATH: '/bin', CODEX_HOME: first.home, CODEX_SQLITE_HOME: first.sqliteHome,
     });
     assert.equal((await fs.stat(first.home)).isDirectory(), true);
     assert.equal((await fs.stat(first.sqliteHome)).isDirectory(), true);

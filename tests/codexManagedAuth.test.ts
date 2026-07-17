@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
-import { configureManagedCodexApiKey, ManagedAuthChild, ManagedAuthSpawn } from '../src/codexManagedAuth';
+import {
+    configureManagedCodexSubscription,
+    ManagedLoginTransport,
+} from '../src/codexManagedAuth';
 import { CodexManagedProfile } from '../src/codexManagedProfile';
 
 const profile: CodexManagedProfile = {
@@ -9,95 +11,137 @@ const profile: CodexManagedProfile = {
     env: { CODEX_HOME: '/isolated/home', CODEX_SQLITE_HOME: '/isolated/sqlite' },
 };
 
-class FakeChild extends EventEmitter implements ManagedAuthChild {
-    input = '';
-    killed = false;
-    stdin = { end: (data = '') => { this.input += data; } };
-    stdout = { on: (_event: 'data', _listener: (chunk: unknown) => void) => undefined };
-    stderr = { on: (_event: 'data', _listener: (chunk: unknown) => void) => undefined };
-    kill(): boolean { this.killed = true; return true; }
+class FakeTransport implements ManagedLoginTransport {
+    started = false;
+    closed = false;
+    accountReads = 0;
+    existingAccount: Record<string, unknown> | null = null;
+    completedAccount: Record<string, unknown> | null = { type: 'chatgpt', planType: 'plus' };
+    loginResult: Record<string, unknown> = {
+        type: 'chatgpt', loginId: 'login-1', authUrl: 'https://chatgpt.com/codex/login?test=1',
+    };
+    complete = true;
+    requests: Array<{ method: string; params?: unknown }> = [];
+    notifications: Array<{ method: string; params?: unknown }> = [];
+    listeners = new Set<(notification: { method: string; params?: unknown }) => void>();
+
+    async start(): Promise<void> { this.started = true; }
+    async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+        this.requests.push({ method, params });
+        if (method === 'initialize') return {} as T;
+        if (method === 'account/read') {
+            const account = this.accountReads++ === 0 ? this.existingAccount : this.completedAccount;
+            return { account, requiresOpenaiAuth: true } as T;
+        }
+        if (method === 'account/login/start') {
+            if (this.complete) queueMicrotask(() => this.emit('account/login/completed', {
+                loginId: this.loginResult.loginId, success: true, error: null,
+            }));
+            return this.loginResult as T;
+        }
+        if (method === 'account/login/cancel') return {} as T;
+        throw new Error(`Unexpected request ${method}`);
+    }
+    async notify(method: string, params?: unknown): Promise<void> { this.notifications.push({ method, params }); }
+    onNotification(listener: (notification: { method: string; params?: unknown }) => void): () => void {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+    async close(): Promise<void> { this.closed = true; }
+    emit(method: string, params?: unknown): void {
+        for (const listener of this.listeners) listener({ method, params });
+    }
 }
 
-test('API key reaches login only through stdin with isolated environment and shell false', async () => {
-    const secret = 'sk-test-super-secret';
-    const child = new FakeChild();
-    let invocation: { executable: string; args: readonly string[]; options: Parameters<ManagedAuthSpawn>[2] } | undefined;
-    const spawn: ManagedAuthSpawn = (executable, args, options) => {
-        invocation = { executable, args, options };
-        queueMicrotask(() => child.emit('close', 0));
-        return child;
-    };
-    const result = await configureManagedCodexApiKey({
-        profile, apiKey: secret, configuredExecutable: 'codex-custom', spawn,
-        baseEnv: { PATH: '/bin', OPENAI_API_KEY: secret, ACCIDENTAL_COPY: secret },
-        resolveExecutable: options => ({ executable: '/node', argsPrefix: ['/codex.js', options.configuredExecutable!], shell: false }),
+function configure(transport: FakeTransport, openExternal = async () => true, timeoutMs?: number) {
+    return configureManagedCodexSubscription({
+        profile, cwd: '/repo', transportFactory: () => transport, openExternal, timeoutMs,
+    });
+}
+
+test('existing isolated ChatGPT login is accepted without opening a browser', async () => {
+    const transport = new FakeTransport();
+    transport.existingAccount = { type: 'chatgpt', planType: 'pro' };
+    let opened = false;
+    const result = await configure(transport, async () => { opened = true; return true; });
+    assert.deepEqual(result, {
+        ok: true, planType: 'pro', message: 'Isolated managed Codex is already signed in with ChatGPT.',
+    });
+    assert.equal(opened, false);
+    assert.equal(transport.closed, true);
+    assert.deepEqual(transport.requests.map(value => value.method), ['initialize', 'account/read']);
+});
+
+test('browser flow requests ChatGPT-managed auth and verifies the resulting subscription', async () => {
+    const transport = new FakeTransport();
+    let opened = '';
+    const states: string[] = [];
+    const result = await configureManagedCodexSubscription({
+        profile, cwd: '/repo', transportFactory: () => transport,
+        openExternal: async url => { opened = url; return true; },
+        onState: state => states.push(state),
     });
     assert.equal(result.ok, true);
-    assert.deepEqual(invocation!.args, [
-        '/codex.js', 'codex-custom', 'login',
-        '-c', 'sqlite_home="/isolated/sqlite"',
-        '-c', 'cli_auth_credentials_store="file"',
-        '--with-api-key',
-    ]);
-    assert.equal(invocation!.options.shell, false);
-    assert.deepEqual(invocation!.options.stdio, ['pipe', 'pipe', 'pipe']);
-    assert.equal(invocation!.options.env!.CODEX_HOME, profile.home);
-    assert.equal(invocation!.options.env!.CODEX_SQLITE_HOME, profile.sqliteHome);
-    assert.equal(Object.values(invocation!.options.env!).includes(secret), false);
-    assert.equal(JSON.stringify(invocation).includes(secret), false);
-    assert.equal(child.input, `${secret}\n`);
-    assert.equal(JSON.stringify(result).includes(secret), false);
-});
-
-test('spawn errors and nonzero exits return fixed redacted failures', async () => {
-    const secret = 'sk-secret-in-error';
-    for (const event of ['error', 'close'] as const) {
-        const child = new FakeChild();
-        const promise = configureManagedCodexApiKey({
-            profile, apiKey: secret, spawn: () => {
-                queueMicrotask(() => event === 'error'
-                    ? child.emit('error', new Error(secret))
-                    : child.emit('close', 1));
-                return child;
-            },
-            resolveExecutable: () => ({ executable: 'codex', argsPrefix: [], shell: false }),
-        });
-        const result = await promise;
-        assert.equal(result.ok, false);
-        assert.equal(JSON.stringify(result).includes(secret), false);
-    }
-});
-
-test('a supplied shell-free launch spec is used without invoking the resolver', async () => {
-    const child = new FakeChild();
-    let executable = '';
-    let args: readonly string[] = [];
-    const result = await configureManagedCodexApiKey({
-        profile, apiKey: 'sk-direct', launchSpec: { executable: '/safe/codex', argsPrefix: ['prefix'], shell: false },
-        resolveExecutable: () => { throw new Error('must not resolve twice'); },
-        spawn: (value, values) => {
-            executable = value; args = values;
-            queueMicrotask(() => child.emit('close', 0));
-            return child;
-        },
+    assert.equal(result.planType, 'plus');
+    assert.equal(opened, transport.loginResult.authUrl);
+    const login = transport.requests.find(value => value.method === 'account/login/start');
+    assert.deepEqual(login?.params, {
+        type: 'chatgpt', useHostedLoginSuccessPage: true, appBrand: 'codex',
     });
+    assert.deepEqual(transport.notifications, [{ method: 'initialized', params: {} }]);
+    assert.equal(states.some(value => /browser/i.test(value)), true);
+    assert.equal(transport.closed, true);
+});
+
+test('non-OpenAI auth URL is rejected and the pending login is cancelled', async () => {
+    const transport = new FakeTransport();
+    transport.loginResult.authUrl = 'https://attacker.example/login';
+    let opened = false;
+    const result = await configure(transport, async () => { opened = true; return true; });
+    assert.equal(result.ok, false);
+    assert.equal(opened, false);
+    assert.equal(transport.requests.some(value => value.method === 'account/login/cancel'), true);
+    assert.equal(transport.closed, true);
+});
+
+test('browser refusal cancels the matching login without exposing its URL', async () => {
+    const transport = new FakeTransport();
+    const result = await configure(transport, async () => false);
+    assert.equal(result.ok, false);
+    assert.equal(JSON.stringify(result).includes('chatgpt.com'), false);
+    const cancel = transport.requests.find(value => value.method === 'account/login/cancel');
+    assert.deepEqual(cancel?.params, { loginId: 'login-1' });
+});
+
+test('login timeout is bounded, redacted, cancelled, and closes the app-server', async () => {
+    const transport = new FakeTransport();
+    transport.complete = false;
+    const result = await configure(transport, async () => true, 1);
+    assert.deepEqual(result, {
+        ok: false, message: 'ChatGPT sign-in timed out. Run the configuration command to try again.',
+    });
+    assert.equal(transport.requests.some(value => value.method === 'account/login/cancel'), true);
+    assert.equal(transport.closed, true);
+});
+
+test('API-key profile is replaced only after successful ChatGPT login verification', async () => {
+    const transport = new FakeTransport();
+    transport.existingAccount = { type: 'apiKey' };
+    const result = await configure(transport);
     assert.equal(result.ok, true);
-    assert.equal(executable, '/safe/codex');
-    assert.deepEqual(args, [
-        'prefix', 'login',
-        '-c', 'sqlite_home="/isolated/sqlite"',
-        '-c', 'cli_auth_credentials_store="file"',
-        '--with-api-key',
-    ]);
+    assert.equal(transport.requests.some(value => value.method === 'account/login/start'), true);
+    assert.equal(transport.accountReads, 2);
 });
 
-test('login timeout is bounded, kills the child, and reports no secret', async () => {
-    const child = new FakeChild();
-    const result = await configureManagedCodexApiKey({
-        profile, apiKey: 'sk-timeout-secret', timeoutMs: 1, spawn: () => child,
-        resolveExecutable: () => ({ executable: 'codex', argsPrefix: [], shell: false }),
+test('transport failures expose only a fixed error kind, never OAuth diagnostics', async () => {
+    const transport = new FakeTransport();
+    transport.start = async () => { throw new Error('https://chatgpt.com/login?secret=oauth-secret'); };
+    const logs: string[] = [];
+    const result = await configureManagedCodexSubscription({
+        profile, cwd: '/repo', transportFactory: () => transport, openExternal: async () => true,
+        onLog: value => logs.push(value),
     });
-    assert.equal(result.timedOut, true);
-    assert.equal(child.killed, true);
-    assert.equal(JSON.stringify(result).includes('sk-timeout-secret'), false);
+    assert.equal(result.ok, false);
+    assert.equal(JSON.stringify({ result, logs }).includes('oauth-secret'), false);
+    assert.deepEqual(logs, ['Managed Codex subscription login failed: Error']);
 });

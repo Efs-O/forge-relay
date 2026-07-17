@@ -176,18 +176,23 @@ Relay also pins the managed process to file-backed credentials and its isolated
 SQLite path, so project-level Codex configuration cannot redirect either into a
 shared keyring or database.
 
-Before first use, run **Forge Relay: Configure Isolated Managed Codex**. The
-command provisions an OpenAI API key through `codex login --with-api-key` into
-this workspace's isolated profile; Forge Relay does not copy credentials from
-the normal Codex profile or store the plaintext key. Managed requests are billed
-separately through the OpenAI Platform account and share that account's quota
-and rate limits. Consumer ChatGPT authentication is not the supported isolated
-path in this experiment.
+Before first use, run **Forge Relay: Sign In Isolated Codex with ChatGPT**. The
+command opens Codex app-server's official browser OAuth flow for this workspace's
+isolated profile. Codex owns token storage and refresh; Forge Relay never copies
+or reads the normal profile's credentials. Managed requests use the ChatGPT
+Codex subscription and its limits—no OpenAI Platform API key is required or
+accepted by this path.
+
+This remains experimental because historical Codex builds occasionally reported
+OAuth refresh-token invalidation when multiple long-lived clients were active.
+Current Codex provides server-side mitigation, but Forge Relay will not claim
+merge readiness until the sidebar and isolated runtime survive live concurrent
+turns and a refresh/soak gate.
 
 The **Codex worker backend** is different: each `dispatch_subagent` with model
 `"codex"` runs one short-lived `codex exec` work order that exits when the task
 finishes. Relay continues to serialize worker dispatches with one another, but
-the isolated API-key-managed app-server may coexist with that worker lane.
+the isolated subscription-managed app-server may coexist with that worker lane.
 
 Codex log noise such as `codex_apps` / `chatgpt.com/backend-api/wham/apps`
 timeouts comes from Codex's own ChatGPT connectors/apps feature, not Forge
@@ -375,7 +380,7 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 | `Forge Relay: STOP All Agents` | Post an immediate STOP command targeting all agents |
 | `Forge Relay: Get Started` | One-shot onboarding: configure Codex + Claude, then open the verification report |
 | `Forge Relay: Configure Codex` | Write the `[mcp_servers.forgerelay]` entry into `~/.codex/config.toml` automatically (zero-touch Codex setup; never clobbers an existing entry) |
-| `Forge Relay: Configure Isolated Managed Codex` | Authenticate this workspace's isolated managed profile with an OpenAI Platform API key without changing the ordinary Codex profile |
+| `Forge Relay: Sign In Isolated Codex with ChatGPT` | Authenticate this workspace's isolated managed profile through Codex's browser OAuth flow without changing the ordinary Codex profile |
 | `Forge Relay: Configure Claude` | Write the `forgerelay` MCP entry into `~/.claude/settings.json` (merges into existing JSON; never clobbers an existing entry) |
 | `Forge Relay: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
 | `Forge Relay: Verify Setup` | Check whether Codex and Claude MCP config are correctly wired on this machine |

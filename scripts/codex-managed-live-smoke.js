@@ -8,6 +8,7 @@ const readline = require('node:readline');
 
 const timeoutMs = 15_000;
 const holdMs = Math.max(0, Math.min(10_000, Number(process.env.FORGERELAY_SMOKE_HOLD_MS) || 0));
+const testChatGptLoginStart = process.env.FORGERELAY_SMOKE_LOGIN_START === '1';
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-relay-codex-smoke-'));
 const codexHome = path.join(tempRoot, 'home');
 const sqliteHome = path.join(tempRoot, 'sqlite');
@@ -31,6 +32,7 @@ const child = spawn(executable(), [
     'app-server', '--listen', 'stdio://',
     '-c', `sqlite_home=${JSON.stringify(sqliteHome)}`,
     '-c', 'cli_auth_credentials_store="file"',
+    '-c', 'forced_login_method="chatgpt"',
 ], {
     cwd: process.cwd(), env, shell: false, windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -73,6 +75,20 @@ async function main() {
         });
         child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
         const account = await request('account/read', { refreshToken: false });
+        let loginStartValid;
+        let loginCancelled;
+        if (testChatGptLoginStart) {
+            const login = await request('account/login/start', {
+                type: 'chatgpt', useHostedLoginSuccessPage: true, appBrand: 'codex',
+            });
+            const auth = new URL(login.authUrl);
+            loginStartValid = login.type === 'chatgpt' && Boolean(login.loginId)
+                && auth.protocol === 'https:'
+                && (auth.hostname === 'chatgpt.com' || auth.hostname.endsWith('.chatgpt.com')
+                    || auth.hostname === 'openai.com' || auth.hostname.endsWith('.openai.com'));
+            await request('account/login/cancel', { loginId: login.loginId });
+            loginCancelled = true;
+        }
         if (holdMs) await new Promise(resolve => setTimeout(resolve, holdMs));
         process.stdout.write(`${JSON.stringify({
             ok: true,
@@ -80,6 +96,7 @@ async function main() {
             accountReadResponded: account !== undefined,
             requiresOpenAIAuth: account?.requiresOpenaiAuth === true,
             isolatedAccountPresent: Boolean(account?.account),
+            ...(testChatGptLoginStart ? { loginStartValid, loginCancelled } : {}),
             isolatedHomePopulated: fs.readdirSync(codexHome).length > 0,
             isolatedSqlitePopulated: fs.readdirSync(sqliteHome).length > 0,
         }, null, 2)}\n`);

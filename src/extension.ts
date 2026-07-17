@@ -16,7 +16,7 @@ import { isVsCodeInstallDir } from './vscodeInstallDir';
 import { resolveForgeControlUrl } from './forgeControlDiscovery';
 import { probeCodexAppServers } from './codexProcessProbe';
 import { CodexManagedProfile, ensureCodexManagedProfile } from './codexManagedProfile';
-import { configureManagedCodexApiKey } from './codexManagedAuth';
+import { configureManagedCodexSubscription } from './codexManagedAuth';
 
 let mcpServer: McpServer | null = null;
 let runtimeManager: RuntimeManager | null = null;
@@ -302,37 +302,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 );
                 return;
             }
-            let apiKey = await vscode.window.showInputBox({
-                title: 'Configure Isolated Managed Codex',
-                prompt: 'Enter an OpenAI Platform API key. Managed usage is API-billed. The key is sent only to Codex login over stdin and is not retained by Forge Relay.',
-                placeHolder: 'sk-...',
-                password: true,
-                ignoreFocusOut: true,
-                validateInput: value => value.trim() ? undefined : 'An API key is required.',
-            });
-            if (!apiKey) return;
-            try {
-                const result = await vscode.window.withProgress({
-                    location: vscode.ProgressLocation.Notification,
-                    title: 'Configuring isolated managed Codex...',
-                    cancellable: false,
-                }, () => configureManagedCodexApiKey({
+            const proceed = 'Sign in with ChatGPT';
+            const choice = await vscode.window.showInformationMessage(
+                'Forge Relay will open the official Codex ChatGPT sign-in for this isolated workspace profile. '
+                + 'Usage follows your ChatGPT Codex subscription and limits; no Platform API key is used.',
+                { modal: true },
+                proceed,
+            );
+            if (choice !== proceed) return;
+            const result = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Signing isolated managed Codex in with ChatGPT...',
+                cancellable: false,
+            }, progress => configureManagedCodexSubscription({
                     profile,
-                    apiKey: apiKey!,
                     configuredExecutable: subagentBackends.codexExecutable,
+                    nodeExecutable: config.get<string>('nodePath', '').trim() || 'node',
                     cwd: repoRoot,
+                    openExternal: async url => vscode.env.openExternal(vscode.Uri.parse(url)),
+                    onState: message => progress.report({ message }),
+                    onLog: message => log(`[codex-login] ${message}`),
                 }));
-                if (result.ok) {
-                    managedProfile = profile;
-                    managedProfileError = undefined;
-                    vscode.window.showInformationMessage(
-                        'Forge Relay: isolated managed Codex authentication configured. Reload the window if the managed option was previously unavailable.',
-                    );
-                } else {
-                    vscode.window.showErrorMessage(`Forge Relay: ${result.message}`);
-                }
-            } finally {
-                apiKey = undefined;
+            if (result.ok) {
+                managedProfile = profile;
+                managedProfileError = undefined;
+                const plan = result.planType ? ` (${result.planType} plan)` : '';
+                vscode.window.showInformationMessage(
+                    `Forge Relay: isolated managed Codex signed in with ChatGPT${plan}. `
+                    + 'Enable the experimental setting and reload only if the managed option is unavailable.',
+                );
+            } else {
+                vscode.window.showErrorMessage(`Forge Relay: ${result.message}`);
             }
         }),
 

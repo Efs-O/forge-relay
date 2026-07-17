@@ -9,7 +9,11 @@ import { CodexManagedBridge, CodexAppServerAdapter } from './codexManagedBridge'
 import { CodexAppServerClient, CodexRpcNotification, CodexServerRequest } from './codexAppServerClient';
 import { CodexRuntimeLease } from './codexRuntimeLease';
 import { resolveCodexExecutable } from './codexExecutable';
-import { CodexManagedProfile, codexManagedIsolationOverrides } from './codexManagedProfile';
+import {
+    CodexManagedProfile,
+    codexManagedIsolationOverrides,
+    managedCodexEnvironment,
+} from './codexManagedProfile';
 
 export interface RuntimeAgentSnapshot {
     status: RuntimeStatus;
@@ -128,10 +132,7 @@ export class RuntimeManager {
             const lease = new CodexRuntimeLease(managedProfile.root, opts.repoRoot, process.pid, opts.extensionVersion);
             const nodeExecutable = opts.nodePath?.trim() || 'node';
             const mcpEnv = { ...(opts.subagentEnv ?? {}) };
-            const appServerEnv = {
-                ...process.env,
-                ...managedProfile.env,
-            };
+            const appServerEnv = managedCodexEnvironment(process.env, managedProfile);
             const createAdapter = (handlers: {
                 handleServerRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
             }): CodexAppServerAdapter => {

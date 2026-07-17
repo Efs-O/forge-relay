@@ -14,10 +14,11 @@ dispatches now run **one at a time**; extra dispatches wait in line instead of
 launching concurrently.
 
 The 0.6.x managed-exclusive runtime also held this slot for its full lifetime.
-The 0.7.0 managed-isolated architecture removes that acquisition: its standalone
-app-server uses a workspace-specific local profile and separately provisioned
-OpenAI Platform API-key authentication, so it may coexist with the serialized
-worker lane. Worker-to-worker serialization remains unchanged.
+The managed-isolated architecture removes that acquisition: its standalone
+app-server uses a workspace-specific local profile and a separate
+ChatGPT-managed OAuth login. Worker-to-worker serialization remains unchanged.
+Managed/worker coexistence is still an experimental live acceptance gate because
+both use the same subscription account even though local credential files differ.
 
 ## Why
 
@@ -45,6 +46,7 @@ version gives workers isolated authentication and session pooling):
    `runCodex` in `src/subagentLoop.ts`.
 2. Delete `src/codexExecutionGate.ts` and this note.
 
-Do not restore the managed runtime's lifetime acquisition. Managed-isolated mode
-is designed and tested to coexist with independently authenticated processes;
-external Codex PID discovery is informational, not part of this guard.
+Do not restore the managed runtime's lifetime acquisition merely as a startup
+workaround. First run the subscription concurrency/refresh acceptance. If it
+fails, managed mode must be disabled or worker dispatch deferred while it runs;
+external Codex PID discovery remains informational, not part of this guard.

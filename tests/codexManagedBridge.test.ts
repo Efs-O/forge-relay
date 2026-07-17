@@ -259,8 +259,22 @@ test('fatal authentication and same-profile ownership failures release without r
     (auth.bridge as unknown as { opts: { clientFactory: () => FakeClient } }).opts.clientFactory = () => client;
     await assert.rejects(auth.bridge.start(), /Unauthenticated/);
     assert.equal(auth.bridge.status(), 'stopped');
-    assert.match(auth.bridge.detailText(), /Configure Isolated Managed Codex/);
+    assert.match(auth.bridge.detailText(), /Sign In Isolated Codex with ChatGPT/);
     assert.equal(auth.lease.released, 1);
+
+    for (const [label, account] of [
+        ['API key', { account: { type: 'apiKey' }, requiresOpenaiAuth: true }],
+        ['personal access token', { account: { type: 'personalAccessToken' }, requiresOpenaiAuth: false }],
+        ['unknown account', { account: { type: 'futureMode' }, requiresOpenaiAuth: false }],
+    ] as const) {
+        const nonSubscription = fixture(t);
+        const nonSubscriptionClient = new FakeClient();
+        nonSubscriptionClient.account = account;
+        (nonSubscription.bridge as unknown as { opts: { clientFactory: () => FakeClient } }).opts.clientFactory = () => nonSubscriptionClient;
+        await assert.rejects(nonSubscription.bridge.start(), /not authenticated with ChatGPT subscription/, label);
+        assert.equal(nonSubscription.bridge.status(), 'stopped', label);
+        assert.equal(nonSubscription.lease.released, 1, label);
+    }
 
     const held = fixture(t);
     held.lease.result = 'held-by-live-other';
