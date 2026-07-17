@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ClaudeMode, CodexMode, SessionRoster } from './types';
+import { startWithManagedCodexSignIn } from './managedCodexStart';
 
 export function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -32,12 +33,33 @@ export async function confirmManagedCodexStart(codexMode: CodexMode): Promise<bo
     const start = 'Start isolated Codex';
     const choice = await vscode.window.showWarningMessage(
         'Forge Relay will start another Codex process with isolated local state for this workspace. '
-        + 'Your existing Codex IDE and CLI sessions remain running. Sign this isolated profile in with ChatGPT first; '
+        + 'Your existing Codex IDE and CLI sessions remain running. If this isolated profile is not signed in, '
+        + 'Forge Relay will offer to open the official ChatGPT sign-in; '
         + 'managed usage follows the same Codex subscription limits rather than Platform API billing.',
         { modal: true },
         start,
     );
     return choice === start;
+}
+
+/** Start from either webview surface, offering subscription sign-in on demand. */
+export async function startRosterWithManagedCodexSignIn(
+    codexMode: CodexMode,
+    start: () => Promise<void>,
+): Promise<boolean> {
+    return startWithManagedCodexSignIn(codexMode, {
+        start,
+        promptSignIn: async () => {
+            const signIn = 'Sign in with ChatGPT';
+            const choice = await vscode.window.showWarningMessage(
+                'This isolated Codex profile is not signed in. Sign in with the ChatGPT account that provides your Codex subscription, then Forge Relay will retry the session automatically.',
+                { modal: true },
+                signIn,
+            );
+            return choice === signIn;
+        },
+        signIn: async () => Boolean(await vscode.commands.executeCommand<boolean>('forgeRelay.configureManagedCodex')),
+    });
 }
 
 export function getWebviewHtml(

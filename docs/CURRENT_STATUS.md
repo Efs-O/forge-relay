@@ -8,7 +8,7 @@ The `feat/managed-codex-relay` branch is replacing the opt-in
 managed-exclusive coordinator with a managed-isolated Codex runtime. MCP-only
 remains the default. The isolated mode owns a standalone app-server, persistent
 thread, workspace-specific `CODEX_HOME` and `CODEX_SQLITE_HOME`, and a profile
-ownership lease. The corrected 0.8.0 design uses Codex app-server's official
+ownership lease. The corrected 0.8.x design uses Codex app-server's official
 ChatGPT browser OAuth flow and subscription limits. It forces ChatGPT/file
 authentication, strips inherited API/access-token credentials, and does not
 read or copy the user's ordinary Codex credentials.
@@ -28,6 +28,13 @@ installation, and a live unauthenticated ChatGPT login-start/cancel smoke agains
 `codex-cli 0.144.4` without disturbing two existing app-servers. It is not ready
 to merge until browser subscription sign-in and the installed board-event,
 CLI/worker, multi-workspace, STOP/restart, and token refresh/soak acceptance pass.
+
+Version 0.8.1 improves the startup UI: an unauthenticated managed start now
+offers ChatGPT sign-in and automatically retries the requested session after
+successful browser authentication. The shared recovery behavior passes four
+additional automated tests across success, cancellation, and unrelated-error
+paths. The full 188-test suite and production build pass, and the inspected
+0.8.1 VSIX is installed locally for interactive acceptance.
 
 ## Released
 

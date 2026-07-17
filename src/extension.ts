@@ -300,7 +300,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 vscode.window.showErrorMessage(
                     `Forge Relay: could not create the isolated Codex profile. ${error instanceof Error ? error.message : String(error)}`,
                 );
-                return;
+                return false;
             }
             const proceed = 'Sign in with ChatGPT';
             const choice = await vscode.window.showInformationMessage(
@@ -309,7 +309,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 { modal: true },
                 proceed,
             );
-            if (choice !== proceed) return;
+            if (choice !== proceed) return false;
             const result = await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
                 title: 'Signing isolated managed Codex in with ChatGPT...',
@@ -331,8 +331,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     `Forge Relay: isolated managed Codex signed in with ChatGPT${plan}. `
                     + 'Enable the experimental setting and reload only if the managed option is unavailable.',
                 );
+                return true;
             } else {
                 vscode.window.showErrorMessage(`Forge Relay: ${result.message}`);
+                return false;
             }
         }),
 

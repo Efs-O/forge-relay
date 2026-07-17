@@ -3,7 +3,13 @@ import { Bridge } from './bridge';
 import { RuntimeManager } from './runtimeManager';
 import { BoardWatcher } from './boardWatcher';
 import { ExtensionMessage, WebviewMessage } from './types';
-import { confirmManagedCodexStart, getNonce, getWebviewHtml, sessionStartNotice } from './webviewContent';
+import {
+    confirmManagedCodexStart,
+    getNonce,
+    getWebviewHtml,
+    sessionStartNotice,
+    startRosterWithManagedCodexSignIn,
+} from './webviewContent';
 
 export class BoardPanel {
     public static current: BoardPanel | undefined;
@@ -180,7 +186,9 @@ export class BoardPanel {
                 case 'connectSession': {
                     const codexMode = msg.codexMode ?? 'mcp';
                     if (!(await confirmManagedCodexStart(codexMode))) break;
-                    await this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, codexMode);
+                    const started = await startRosterWithManagedCodexSignIn(codexMode, () =>
+                        this.runtime.setRoster(msg.roster, msg.claudeMode, msg.forgeCoordinatorModel, codexMode));
+                    if (!started) break;
                     this.bridge.startSession(msg.agent, {
                         roster: msg.roster,
                         claudeMode: msg.claudeMode,
