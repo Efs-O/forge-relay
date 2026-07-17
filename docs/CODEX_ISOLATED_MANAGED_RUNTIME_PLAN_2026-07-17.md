@@ -289,11 +289,17 @@ Tests must prove:
 5. **Passed 2026-07-17 on installed R3:** an independent subscription-backed
    synchronous worker and durable asynchronous worker completed while managed
    Codex remained connected.
-6. Sign in and start a second workspace profile concurrently.
-7. Confirm all external PIDs remain alive and each managed profile routes only
-   to its own workspace board.
-8. STOP/PAUSE one managed runtime; unrelated Codex clients must survive.
-9. Reload/crash/restart; confirm no orphan, stale lease, or SQLite lock.
+6. **Passed 2026-07-17 on 0.8.3-rc1:** sign in and start a second workspace
+   profile concurrently.
+7. **Passed 2026-07-17 on 0.8.3-rc1:** two distinct managed profile/process/
+   SQLite chains remained alive, and the `GEMMA4GR_ROUTE_PASSED` marker appeared
+   on the Gemma4GR board but not the forge-relay board.
+8. **Passed 2026-07-17 on 0.8.3-rc1:** an operator STOP targeting all was
+   acknowledged, both managed process chains survived, the command resolved
+   cleanly, and forge-relay resumed a different-agent turn/MCP approval.
+9. Reload/crash/restart after concurrent operation; confirm no orphan, stale
+   lease, or SQLite lock. Initial candidate reload passed, but a post-concurrency
+   reload/crash check is still required.
 10. Keep sidebar and managed processes active across an actual token refresh
     window or an explicit safe refresh probe, then complete turns in both.
 11. Inspect logs for `refresh_token_reused`, `token_invalidated`, 401 loops,
@@ -388,13 +394,22 @@ that the subscription requirement is met.
   Codex worker with the expected 0.8.3 marker, durable asynchronous worker, and
   clean board-state checks. The managed app-server remained alive and handled
   different-agent board events while both workers completed.
+- A second 0.8.3 managed runtime started concurrently for Gemma4GR with a
+  distinct workspace fingerprint, file-backed ChatGPT authentication, SQLite
+  state, extension-host parent, and app-server process chain. The operator's
+  `GEMMA4GR_ROUTE_PASSED` marker appeared only on that workspace board; it was
+  absent from the forge-relay board while both chains remained alive.
+- An operator STOP targeting all was acknowledged by managed Codex and this
+  agent, then resolved with no leaked claim, command, or task. Both managed
+  process chains survived, and forge-relay subsequently accepted a fresh MCP
+  tool approval from a different-agent post-STOP turn.
 
 ### Corrected evidence still required before merge
 
 - Record the returned subscription plan type explicitly; successful managed
   startup already proves the enforced `account.type == "chatgpt"` check passed.
-- Second-workspace concurrency.
-- STOP/restart isolation.
+- Post-concurrency reload/crash recovery with no orphan, stale lease, or SQLite
+  lock.
 - Token refresh/soak with no invalidation.
 
 ### Next-session resume point
@@ -402,7 +417,7 @@ that the subscription requirement is met.
 Start from installed 0.8.3-rc1 and its successful managed-write plus sync/async
 worker evidence. Do not rework login, PID isolation, permission encoding,
 executable discovery, or MCP elicitation unless new evidence regresses those
-paths. Continue with second-workspace concurrency, STOP/restart isolation, then
-token-refresh soak. Separately normalize or document the worker `0.144.2` versus
-managed/terminal `0.144.4` resolution. Keep board mode off in a new session
-unless the operator explicitly activates it there.
+paths. Continue with a post-concurrency reload/recovery check, explicit plan
+type capture, then token-refresh soak. Separately normalize or document the
+worker `0.144.2` versus managed/terminal `0.144.4` resolution. Keep board mode
+off in a new session unless the operator explicitly activates it there.

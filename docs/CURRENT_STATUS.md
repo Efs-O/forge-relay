@@ -88,8 +88,13 @@ app-server, canonical native create/update/read/delete startup gate, active MCP
 tool elicitation path, board claim/release, 49-model Forge catalog, synchronous
 Codex worker with the expected 0.8.3 marker, durable asynchronous worker, and a
 clean final board. The managed runtime remained alive while both workers ran
-and processed different-agent board events. Remaining merge gates are the
-second managed workspace, operator STOP/restart isolation, explicit plan-type
+and processed different-agent board events. A second authenticated 0.8.3
+managed runtime then started concurrently for Gemma4GR with a distinct profile,
+SQLite store, and process chain. Its `GEMMA4GR_ROUTE_PASSED` response appeared
+only on that workspace board. An operator STOP targeting all was acknowledged
+and resolved without killing either managed chain or leaking board state, and
+forge-relay resumed a fresh different-agent MCP turn afterward. Remaining merge
+gates are a post-concurrency reload/crash recovery check, explicit plan-type
 record, and token-refresh soak.
 
 ## Published
