@@ -93,9 +93,11 @@ managed runtime then started concurrently for Gemma4GR with a distinct profile,
 SQLite store, and process chain. Its `GEMMA4GR_ROUTE_PASSED` response appeared
 only on that workspace board. An operator STOP targeting all was acknowledged
 and resolved without killing either managed chain or leaking board state, and
-forge-relay resumed a fresh different-agent MCP turn afterward. Remaining merge
-gates are a post-concurrency reload/crash recovery check, explicit plan-type
-record, and token-refresh soak.
+forge-relay resumed a fresh different-agent MCP turn afterward. Gemma4GR then
+reloaded: its old managed process chain exited, a new chain started under the
+same isolated profile and SQLite store, forge-relay retained its original PIDs,
+and `GEMMA4GR_RELOAD_PASSED` routed only on the recovered workspace board.
+Remaining merge gates are explicit plan-type capture and token-refresh soak.
 
 ## Published
 
