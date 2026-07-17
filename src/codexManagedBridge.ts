@@ -78,6 +78,70 @@ interface ActiveTurn {
 
 export type CodexFailureKind = 'fatal-auth' | 'fatal-protocol' | 'fatal-contention' | 'transient';
 
+interface ManagedCodexServerRequestContext {
+    threadId?: string;
+    turnId?: string;
+}
+
+export interface ManagedCodexServerRequestResolution {
+    response: unknown;
+    audit: 'accepted-forgerelay-mcp' | 'declined-elicitation' | 'declined-approval';
+}
+
+function isExactEmptyObjectSchema(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const schema = value as Record<string, unknown>;
+    if (schema.type !== 'object') return false;
+    if (!Object.prototype.hasOwnProperty.call(schema, 'properties')
+        || !schema.properties
+        || typeof schema.properties !== 'object'
+        || Array.isArray(schema.properties)) return false;
+    const properties = schema.properties as Record<string, unknown>;
+    if (Object.keys(properties).length !== 0) return false;
+    const required = schema.required;
+    if (required !== undefined && (!Array.isArray(required) || required.length !== 0)) return false;
+    return Object.keys(schema).every(key => key === 'type' || key === 'properties' || key === 'required');
+}
+
+/**
+ * Resolve app-server requests without granting general Codex permissions.
+ * The sole accepted request is Codex's current-turn approval form for a tool
+ * on the configured Forge Relay MCP server. Everything else stays denied.
+ */
+export function resolveManagedCodexServerRequest(
+    method: string,
+    params: Record<string, unknown>,
+    context: ManagedCodexServerRequestContext,
+): ManagedCodexServerRequestResolution {
+    if (method === 'mcpServer/elicitation/request') {
+        const meta = record(params._meta);
+        const valid = params.serverName === 'forgerelay'
+            && typeof context.threadId === 'string'
+            && params.threadId === context.threadId
+            && typeof context.turnId === 'string'
+            && params.turnId === context.turnId
+            && params.mode === 'form'
+            && meta.codex_approval_kind === 'mcp_tool_call'
+            && isExactEmptyObjectSchema(params.requestedSchema);
+        return valid
+            ? {
+                response: { action: 'accept', content: {}, _meta: null },
+                audit: 'accepted-forgerelay-mcp',
+            }
+            : {
+                response: { action: 'decline', content: null, _meta: null },
+                audit: 'declined-elicitation',
+            };
+    }
+    if (/approval/i.test(method)) {
+        return {
+            response: { decision: 'decline', approved: false },
+            audit: 'declined-approval',
+        };
+    }
+    throw new Error(`Unsupported app-server request: ${method}`);
+}
+
 /** Keep authentication and protocol failures out of restart loops. */
 export function classifyCodexManagedFailure(error: unknown): CodexFailureKind {
     const message = error instanceof Error ? error.message : String(error);
@@ -333,12 +397,17 @@ export class CodexManagedBridge {
         if (exitOff) this.subscriptions.push(exitOff);
     }
 
-    private async onServerRequest(method: string, _params: Record<string, unknown>): Promise<unknown> {
-        if (/approval/i.test(method)) {
-            this.opts.onLog?.(`Managed Codex denied unexpected approval request: ${method}`);
-            return { decision: 'decline', approved: false };
+    private async onServerRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+        const resolution = resolveManagedCodexServerRequest(method, params, {
+            threadId: this.threadId,
+            turnId: this.active?.turnId,
+        });
+        if (resolution.audit === 'accepted-forgerelay-mcp') {
+            this.opts.onLog?.('Managed Codex accepted active Forge Relay MCP tool approval.');
+        } else {
+            this.opts.onLog?.(`Managed Codex safely denied server request: ${method}`);
         }
-        throw new Error(`Unsupported app-server request: ${method}`);
+        return resolution.response;
     }
 
     private onNotification(generation: number, method: string, params: Record<string, unknown>): void {
