@@ -10,13 +10,25 @@ test('shared completion round truncates tool results only in model history', asy
         messages,
         complete: async () => ({ choices: [{ message: { role: 'assistant', tool_calls: [{ id: '1', function: { name: 'get_status', arguments: '{}' } }] } }] }),
         executeTool: async () => full,
-        onToolCall: (_name, value) => { observed = value; },
+        onToolCall: (_name, _args, value) => { observed = value; },
         emptyLengthError: 'length',
     });
 
     assert.equal(result.finished, false);
     assert.equal(observed.length, 9_000);
     assert.equal(messages[1].content, full.slice(0, 8_000));
+});
+
+test('shared completion round exposes parsed arguments before execution', async () => {
+    let observed: Record<string, unknown> | undefined;
+    await runToolCompletionRound({
+        messages: [],
+        complete: async () => ({ choices: [{ message: { role: 'assistant', tool_calls: [{ function: { name: 'post', arguments: '{"note":"x"}' } }] } }] }),
+        beforeTool: (_name, args) => { observed = args; },
+        executeTool: async () => 'ok',
+        emptyLengthError: 'length',
+    });
+    assert.deepEqual(observed, { note: 'x' });
 });
 
 test('shared completion round surfaces empty length-overflow responses', async () => {

@@ -98,7 +98,7 @@ export function buildCodexAppServerArgs(
 ): string[] {
     const args = ['app-server', '--listen', 'stdio://'];
     for (const [key, value] of Object.entries(configOverrides)) {
-        if (!/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(key)) {
+        if (!/^[A-Za-z0-9_-]+(?:\.(?:[A-Za-z0-9_-]+|:[A-Za-z0-9_-]+))*$/.test(key)) {
             throw new Error(`Invalid Codex config override key: ${key}`);
         }
         args.push('-c', `${key}=${encodeTomlValue(value)}`);

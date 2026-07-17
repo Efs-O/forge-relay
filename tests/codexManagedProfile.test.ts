@@ -5,7 +5,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
     codexManagedIsolationOverrides,
+    codexManagedRuntimeOverrides,
     ensureCodexManagedProfile,
+    MANAGED_CLANKER_PERMISSION_PROFILE,
     managedCodexEnvironment,
 } from '../src/codexManagedProfile';
 
@@ -33,6 +35,23 @@ test('managed profile is stable for normalized workspace identity and creates bo
         cli_auth_credentials_store: 'file',
         forced_login_method: 'chatgpt',
     });
+    assert.deepEqual(codexManagedRuntimeOverrides(first, 'win32'), {
+        sqlite_home: first.sqliteHome,
+        cli_auth_credentials_store: 'file',
+        forced_login_method: 'chatgpt',
+        default_permissions: MANAGED_CLANKER_PERMISSION_PROFILE,
+        [`permissions.${MANAGED_CLANKER_PERMISSION_PROFILE}.filesystem.:minimal`]: 'read',
+        [`permissions.${MANAGED_CLANKER_PERMISSION_PROFILE}.filesystem.:root`]: 'read',
+        [`permissions.${MANAGED_CLANKER_PERMISSION_PROFILE}.filesystem.:workspace_roots`]: {
+            '.': 'write',
+            '.git': 'read',
+            '.agents': 'read',
+            '.codex': 'read',
+        },
+        [`permissions.${MANAGED_CLANKER_PERMISSION_PROFILE}.network.enabled`]: false,
+        'windows.sandbox': 'unelevated',
+    });
+    assert.equal('windows.sandbox' in codexManagedRuntimeOverrides(first, 'linux'), false);
     assert.deepEqual(managedCodexEnvironment({
         PATH: '/bin', OPENAI_API_KEY: 'api', CODEX_API_KEY: 'exec', CODEX_ACCESS_TOKEN: 'access',
         CODEX_HOME: '/ordinary', CODEX_SQLITE_HOME: '/ordinary/sqlite',

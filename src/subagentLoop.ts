@@ -14,6 +14,8 @@ import {
 } from './codexWorker';
 import { executeWorkerTool, workerToolSchemas, WorkerAutonomy, WorkerToolContext, WorkerToolResult } from './workerTools';
 import { CompletionResponse, runToolCompletionRound } from './toolCompletionRound';
+import { ToolLoopGuard } from './toolLoopGuard';
+import { asyncDispatchReceipt, createSubagentRun, updateSubagentRun } from './subagentRuns';
 
 export interface WorkerLoopOptions {
     maxSteps?: number;
@@ -28,9 +30,12 @@ export interface WorkerLoopOptions {
     signal?: AbortSignal;
     /** Optional completion-token cap applied to every worker round. */
     maxTokens?: number;
+    /** Cumulative prompt + completion budget across the whole worker run. */
+    maxTotalTokens?: number;
 }
 
 export interface WorkerLoopResult {
+    state: 'succeeded' | 'failed' | 'aborted' | 'exhausted';
     finalText: string;
     steps: number;
     toolCalls: number;
@@ -58,13 +63,14 @@ const MAX_STEPS_DEFAULT = 12;
  * to invent role instructions for a worker. Exported for the regression test
  * that locks this invariant (tests/workerSystemPrompt.test.ts).
  */
-export function systemPrompt(autonomy: string): string {
+export function systemPrompt(autonomy: string, repoRoot = process.cwd()): string {
     const capability = autonomy === 'clanker'
         ? 'You may read, search, write, edit, and run commands. Destructive commands are refused automatically.'
         : 'You are in DRAFT mode: read and search freely, but you cannot write directly — use propose_diff to suggest changes for the orchestrator to apply.';
     return [
         'You are an autonomous worker subagent on a shared coding board, dispatched by an orchestrator.',
         'Work the task to completion using the provided tools, one step at a time.',
+        `Execution context: repo_root=${repoRoot}, platform=${process.platform}, arch=${process.arch}, path_style=${process.platform === 'win32' ? 'windows' : 'posix'}, command_contract=executable-plus-argv (no shell operators).`,
         capability,
         'Keep going until the task is done, then give a short final summary of what you did (no tool call).',
     ].join(' ');
@@ -85,7 +91,7 @@ export async function runWorkerLoop(
 ): Promise<WorkerLoopResult> {
     const maxSteps = opts.maxSteps ?? MAX_STEPS_DEFAULT;
     const tools = workerToolSchemas(ctx.autonomy);
-    const sys = systemPrompt(ctx.autonomy);
+    const sys = systemPrompt(ctx.autonomy, ctx.repoRoot);
     if (!sys.trim()) {
         throw new Error('worker system prompt resolved empty — refusing to dispatch a worker without role instructions');
     }
@@ -97,16 +103,23 @@ export async function runWorkerLoop(
     let toolCalls = 0;
     let promptTokens = 0;
     let totalTokens = 0;
+    let lastToolFailure = '';
+    const loopGuard = new ToolLoopGuard();
     for (let step = 0; step < maxSteps; step++) {
         const abort = opts.shouldAbort?.();
         if (abort) {
-            return { finalText: `Aborted: ${abort}`, steps: step, toolCalls, aborted: abort, promptTokens, totalTokens };
+            return { state: 'aborted', finalText: `Aborted: ${abort}`, steps: step, toolCalls, aborted: abort, promptTokens, totalTokens };
+        }
+        if (opts.maxTotalTokens !== undefined && totalTokens >= opts.maxTotalTokens) {
+            return { state: 'exhausted', finalText: `Reached total token budget (${opts.maxTotalTokens}).`, steps: step, toolCalls, promptTokens, totalTokens };
         }
 
         // Fix B: a single transient ECONNRESET (e.g. a still-warming backend in the
         // opening burst of a fan-out) is retried with short backoff instead of
         // killing the worker. HTTP errors and aborts still surface immediately.
-        const round = await runToolCompletionRound({
+        let round;
+        try {
+            round = await runToolCompletionRound({
             messages,
             complete: () => withConnRetry(
                 () => chatCompletionRaw(
@@ -116,9 +129,16 @@ export async function runWorkerLoop(
                 ),
                 { signal: opts.signal, onRetry: opts.onRetry },
             ) as Promise<CompletionResponse>,
+            beforeTool: (name, args) => {
+                const blocked = opts.shouldAbort?.();
+                if (blocked) throw new Error(`Aborted: ${blocked}`);
+                loopGuard.beforeCall(name, args);
+            },
             executeTool: async (name, args) => {
                 const result = await executeWorkerTool(name, args, ctx);
                 opts.onToolCall?.(name, result);
+                lastToolFailure = result.ok === false ? result.result : '';
+                loopGuard.afterCall(result.result);
                 return result.result;
             },
             onResponse: res => {
@@ -131,14 +151,29 @@ export async function runWorkerLoop(
             },
             missingMessageText: 'Worker returned no message.',
             emptyLengthError: 'worker produced no output and hit the token limit (reasoning/length overflow — raise max_tokens or lower reasoning_effort)',
-        });
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (/token limit|length overflow/i.test(message)) {
+                return { state: 'exhausted', finalText: message, steps: step + 1, toolCalls, promptTokens, totalTokens };
+            }
+            if (/^Aborted:/.test(message)) {
+                const reason = message.replace(/^Aborted:\s*/, '');
+                return { state: 'aborted', finalText: message, steps: step, toolCalls, aborted: reason, promptTokens, totalTokens };
+            }
+            return { state: 'failed', finalText: message, steps: step + 1, toolCalls, promptTokens, totalTokens };
+        }
         toolCalls += round.toolCalls;
         if (round.finished) {
-            return { finalText: round.finalText || '(worker finished with no summary)', steps: step + 1, toolCalls, promptTokens, totalTokens };
+            return {
+                state: lastToolFailure ? 'failed' : 'succeeded',
+                finalText: lastToolFailure || round.finalText || '(worker finished with no summary)',
+                steps: step + 1, toolCalls, promptTokens, totalTokens,
+            };
         }
     }
 
-    return { finalText: `Reached step limit (${maxSteps}) without finishing.`, steps: maxSteps, toolCalls, promptTokens, totalTokens };
+    return { state: 'exhausted', finalText: `Reached step limit (${maxSteps}) without finishing.`, steps: maxSteps, toolCalls, promptTokens, totalTokens };
 }
 
 /** Compact token count for board posts: 12345 → "12k", 800 → "800". */
@@ -159,14 +194,14 @@ function usageSuffix(r: WorkerLoopResult): string {
 }
 
 /** Record a git checkpoint so a clanker worker's changes are revertible. */
-function gitCheckpoint(repoRoot: string): string {
+export function gitCheckpoint(repoRoot: string): string {
     try {
         const head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
         if (head.status !== 0) { return 'no git repo (changes not checkpointed)'; }
         const sha = (head.stdout || '').trim();
         const status = spawnSync('git', ['status', '--porcelain'], { cwd: repoRoot, encoding: 'utf8' });
         const dirty = (status.stdout || '').trim().split('\n').filter(Boolean).length;
-        return `git @ ${sha}${dirty ? ` (+${dirty} uncommitted)` : ' (clean)'} — revert worker edits with: git restore .`;
+        return `git @ ${sha}${dirty ? ` (+${dirty} pre-existing uncommitted)` : ' (clean)'} — recovery: review the diff and restore only worker-owned paths`;
     } catch {
         return 'git checkpoint unavailable';
     }
@@ -201,6 +236,19 @@ export async function handleDispatchSubagent(
         return 'ERROR: dispatch_subagent max_tokens must be an integer from 1 to 131072.';
     }
     const maxTokens = rawMaxTokens as number | undefined;
+    const rawBudget = args.max_total_tokens ?? args.token_budget;
+    if (args.max_total_tokens !== undefined && args.token_budget !== undefined && args.max_total_tokens !== args.token_budget) {
+        return 'ERROR: max_total_tokens and token_budget disagree; supply only max_total_tokens.';
+    }
+    if (rawBudget !== undefined && (typeof rawBudget !== 'number' || !Number.isInteger(rawBudget) || rawBudget < 1 || rawBudget > 2_000_000)) {
+        return 'ERROR: max_total_tokens/token_budget must be an integer from 1 to 2000000.';
+    }
+    const maxTotalTokens = rawBudget as number | undefined;
+    const rawMaxSteps = args.max_steps;
+    if (rawMaxSteps !== undefined && (typeof rawMaxSteps !== 'number' || !Number.isInteger(rawMaxSteps) || rawMaxSteps < 1 || rawMaxSteps > 100)) {
+        return 'ERROR: max_steps must be an integer from 1 to 100.';
+    }
+    const maxSteps = rawMaxSteps as number | undefined;
 
     const toolsSpecified = args.tools !== undefined;
     let requestedTools = (String(args.tools ?? 'none') as SubagentToolMode);
@@ -231,6 +279,7 @@ export async function handleDispatchSubagent(
         const autonomy: WorkerAutonomy = bridge.getAutonomyMode();
         const sandbox = autonomy === 'clanker' ? 'workspace-write' as const : 'read-only' as const;
         const checkpoint = autonomy === 'clanker' ? gitCheckpoint(bridge.getRepoRoot()) : 'draft mode (read-only sandbox)';
+        const runRecord = mode === 'async' ? createSubagentRun(bridge.getRepoRoot(), { runId: subagentId, worker, model }) : null;
         // Best-effort model label for the board: the explicit codex:<model>
         // override, else the user's ~/.codex/config.toml default. The done post
         // upgrades to the model codex actually reported in its run header.
@@ -241,6 +290,7 @@ export async function handleDispatchSubagent(
             const wake = mentionDispatcher ? `${dispatcher}: ` : '';
             const releaseSlot = await acquireCodexProcessSlot();
             try {
+                if (runRecord) updateSubagentRun(bridge.getRepoRoot(), subagentId, 'running');
                 const res = await runCodexExec({
                     executable: backends.codexExecutable,
                     repoRoot: bridge.getRepoRoot(),
@@ -255,17 +305,21 @@ export async function handleDispatchSubagent(
                 });
                 if (res.aborted) {
                     bridge.post(worker, formatWorkerPost(`${wake}aborted [${subagentId.slice(0, 10)}]: ${res.aborted}`));
+                    if (runRecord) updateSubagentRun(bridge.getRepoRoot(), subagentId, 'aborted', res.aborted);
                     return `SUBAGENT ${subagentId} (${model}) ABORTED: ${res.aborted}${res.output ? `\n\nPartial output:\n${res.output}` : ''}`;
                 }
                 if (!res.ok) {
                     bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${res.error ?? 'codex exec failed'}`));
+                    if (runRecord) updateSubagentRun(bridge.getRepoRoot(), subagentId, 'failed', res.error ?? 'codex exec failed');
                     return `SUBAGENT ${subagentId} (${model}) ERROR: ${res.error ?? 'codex exec failed'}${res.output ? `\n\nPartial output:\n${res.output}` : ''}`;
                 }
                 bridge.post(worker, formatWorkerPost(`${wake}done [${subagentId.slice(0, 10)}] (${res.model ?? modelLabel}): ${res.output}`));
+                if (runRecord) updateSubagentRun(bridge.getRepoRoot(), subagentId, 'succeeded', res.output.slice(0, 1_000));
                 return `SUBAGENT ${subagentId} (${model} → ${res.model ?? modelLabel}, ${autonomy}) COMPLETED:\n\n${res.output}\n\n[${checkpoint}]`;
             } catch (err) {
                 const error = err instanceof Error ? err.message : String(err);
                 bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${error}`));
+                if (runRecord) updateSubagentRun(bridge.getRepoRoot(), subagentId, 'failed', error);
                 return `SUBAGENT ${subagentId} (${model}) ERROR: ${error}`;
             } finally {
                 releaseSlot();
@@ -275,7 +329,7 @@ export async function handleDispatchSubagent(
 
         if (mode === 'async') {
             void runCodex(true).catch(() => { /* error already posted to the board */ });
-            return `SUBAGENT ${subagentId} (${model}, ${autonomy}) DISPATCHED (async). Codex is working in the background as ${worker} and will notify ${dispatcher} on the board when done. [${checkpoint}]`;
+            return asyncDispatchReceipt(runRecord!);
         }
         return runCodex(false);
     }
@@ -319,6 +373,17 @@ export async function handleDispatchSubagent(
             const hold = await forgeHolds.acquire(controlUrl, route.model, () => {
                 bridge.post(worker, `⚠ Forge /release for ${route.model} not confirmed — its load may stay held`);
             });
+            const modelMatches = hold.resolved.model === route.model;
+            const backendMatches = !route.expectedBackend || hold.resolved.backend === route.expectedBackend;
+            if (!modelMatches || !backendMatches) {
+                await hold.release();
+                const expected = `${route.model}${route.expectedBackend ? ` on ${route.expectedBackend}` : ''}`;
+                const actual = `${hold.resolved.model} on ${hold.resolved.backend}`;
+                const msg = `Forge catalog/load drift: selected ${expected}, but /ensure resolved ${actual}. Refresh the catalog before dispatching.`;
+                bridge.post(worker, formatWorkerPost(`not dispatched (${model}): ${msg}`));
+                finishWorkerRun();
+                return `SUBAGENT not dispatched (${model}) — ${msg}`;
+            }
             // The resolved endpoint carries the real backend Forge loaded the model
             // on (llamacpp/ollama/…); the "via Forge" marker keeps routing visible.
             resolved = hold.resolved;
@@ -396,6 +461,7 @@ export async function handleDispatchSubagent(
     const ctx: WorkerToolContext = { repoRoot: bridge.getRepoRoot(), autonomy };
 
     const checkpoint = autonomy === 'clanker' ? gitCheckpoint(ctx.repoRoot) : 'draft mode (no writes)';
+    const runRecord = mode === 'async' ? createSubagentRun(ctx.repoRoot, { runId: subagentId, worker, model }) : null;
     bridge.post(worker, formatWorkerPost(`started [${subagentId.slice(0, 10)}] ${mode} ${autonomy} (${resolved.backend}:${resolved.model})${modelNote}: ${task} | ${checkpoint}`));
 
     // The worker run, shared by sync and async. In async mode the done/error post
@@ -415,8 +481,19 @@ export async function handleDispatchSubagent(
         // background rather than blocking the dispatch call.
         const slot = await acquireSlot();
         try {
-            const result = await runWorkerLoop(resolved, ctx, task, context, {
+            if (runRecord) updateSubagentRun(ctx.repoRoot, subagentId, 'running');
+            const runCtx: WorkerToolContext = {
+                ...ctx,
+                authorizeMutation: target => {
+                    if (claimed.has(target)) return;
+                    bridge.claim(worker, [target], 60, `worker pre-write claim ${subagentId.slice(0, 10)}`);
+                    claimed.add(target);
+                },
+            };
+            const result = await runWorkerLoop(resolved, runCtx, task, context, {
+                maxSteps,
                 maxTokens,
+                maxTotalTokens,
                 shouldAbort: () => {
                     const blocking = bridge.getBlockingCommands(worker);
                     return blocking.length ? `board STOP/PAUSE (${blocking[0].text})` : null;
@@ -442,17 +519,16 @@ export async function handleDispatchSubagent(
                     } else if (res.mutated || name === 'propose_diff') {
                         bridge.post(worker, formatWorkerPost(`${name} ${res.touched ?? ''}: ${res.result}`));
                     }
-                    if (res.mutated && res.touched && !claimed.has(res.touched)) {
-                        claimed.add(res.touched);
-                        try { bridge.claim(worker, [res.touched], 60, `worker auto-claim ${subagentId.slice(0, 10)}`); } catch { /* advisory — ignore conflicts */ }
-                    }
                 },
             });
-            bridge.post(worker, formatWorkerPost(`${wake}done [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools${usageSuffix(result)}): ${result.finalText}`));
+            const verb = result.state === 'succeeded' ? 'done' : result.state;
+            bridge.post(worker, formatWorkerPost(`${wake}${verb} [${subagentId.slice(0, 10)}] (${result.steps} steps, ${result.toolCalls} tools${usageSuffix(result)}): ${result.finalText}`));
+            if (runRecord) updateSubagentRun(ctx.repoRoot, subagentId, result.state, result.finalText.slice(0, 1_000));
             return result;
         } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             bridge.post(worker, formatWorkerPost(`${wake}error [${subagentId.slice(0, 10)}]: ${error}`));
+            if (runRecord) updateSubagentRun(ctx.repoRoot, subagentId, 'failed', error);
             throw err;
         } finally {
             for (const p of claimed) {
@@ -477,15 +553,15 @@ export async function handleDispatchSubagent(
     // wakes the dispatcher via its @mentioned done post.
     if (mode === 'async') {
         void runWork(true).catch(() => { /* error already posted to the board */ });
-        return `SUBAGENT ${subagentId} (${model}, ${autonomy}) DISPATCHED (async). It is working in the background and will post progress as ${worker}, then notify ${dispatcher} on the board when done. [${checkpoint}]`;
+        return asyncDispatchReceipt(runRecord!);
     }
 
     // Sync — block until done and return the result inline.
     try {
         const result = await runWork(false);
-        const head = result.aborted
-            ? `SUBAGENT ${subagentId} (${model}) ABORTED: ${result.aborted}`
-            : `SUBAGENT ${subagentId} (${model}, ${autonomy}) COMPLETED (${result.steps} steps, ${result.toolCalls} tool calls${usageSuffix(result)}):`;
+        const head = result.state === 'succeeded'
+            ? `SUBAGENT ${subagentId} (${model}, ${autonomy}) COMPLETED (${result.steps} steps, ${result.toolCalls} tool calls${usageSuffix(result)}):`
+            : `SUBAGENT ${subagentId} (${model}) ${result.state.toUpperCase()}: ${result.aborted ?? result.finalText}`;
         return `${head}\n\n${result.finalText}\n\n[${checkpoint}]`;
     } catch (err) {
         return `SUBAGENT ${subagentId} (${model}) ERROR: ${err instanceof Error ? err.message : String(err)}`;

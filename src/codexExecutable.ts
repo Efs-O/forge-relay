@@ -15,6 +15,8 @@ export interface CodexExecutableOptions {
     /** Injectable equivalent of `where.exe <command>`. */
     where?: (command: string) => string[];
     existsSync?: (filePath: string) => boolean;
+    /** Injectable Windows roaming-app-data root used for the npm global fallback. */
+    appData?: string;
 }
 
 function defaultWhere(command: string): string[] {
@@ -72,6 +74,21 @@ export function resolveCodexExecutable(options: CodexExecutableOptions = {}): Co
         }
     }
 
+    // VS Code extension hosts do not necessarily inherit the terminal's PATH.
+    // npm's per-user package can therefore be installed and runnable in a
+    // terminal while `where.exe codex` returns nothing here. Resolve the
+    // standard user-global entry directly and still launch it through Node,
+    // without invoking cmd.exe or PowerShell.
+    if (configured.toLowerCase() === 'codex') {
+        const appData = options.appData ?? process.env.APPDATA ?? '';
+        const npmScript = appData
+            ? path.win32.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+            : '';
+        if (npmScript && exists(npmScript)) {
+            return { executable: nodeExecutable, argsPrefix: [npmScript], shell: false };
+        }
+    }
+
     // A configured absolute/path-like non-shim may be a native launcher without
     // an extension. Keep it direct only when it demonstrably exists.
     if (isPathLike(configured) && exists(configured) && !isWindowsShim(configured)) {
@@ -82,7 +99,7 @@ export function resolveCodexExecutable(options: CodexExecutableOptions = {}): Co
     throw new Error(
         `Cannot launch Codex safely from ${subject}. `
         + 'Forge Relay found no native .exe and could not locate '
-        + '@openai/codex/bin/codex.js beside the npm shim. '
+        + '@openai/codex/bin/codex.js beside the npm shim or in the user npm prefix. '
         + 'Reinstall @openai/codex or configure forgeRelay.codexExecutable to a native codex.exe.',
     );
 }

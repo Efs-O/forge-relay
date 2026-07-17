@@ -43,9 +43,40 @@ runtime starts, receives a user board event, and posts a Codex reply while the
 operator's existing Codex session remains active. A later `codex`-authored
 connectivity post correctly produced no managed reply because self-authored
 events are intentionally filtered to prevent feedback loops. Basic managed
-subscription coordination is therefore working. Merge remains gated on the
-independent CLI/worker, second-workspace, STOP/restart, and token-refresh/soak
-checks described in the isolated-runtime plan.
+subscription coordination is therefore working. R3 subsequently proved an
+independent subscription-backed Codex worker can run while the managed runtime
+remains connected. Merge remains gated on second-workspace concurrency,
+STOP/restart isolation, and token-refresh/soak checks described in the
+isolated-runtime plan.
+
+The Forge-only pipeline findings were remediated in this repository on
+2026-07-17. Managed Codex now validates canonical runtime workspace roots and
+uses a Relay-owned Clanker profile with global reads, workspace-only writes,
+protected repository metadata, no network, and the Windows `unelevated`
+sandbox. A deterministic native create/update/read/delete gate runs before the
+runtime is declared ready or a Clanker turn begins. Standalone Codex MCP
+auto-discovers Forge control, and explicit Codex setup installs the full safe
+tool approval set including `release`. The batch-fix VSIX is installed at
+`forge-relay-subscription-codex-experimental-0.8.2-batch-fixes-r3.vsix` (SHA-256
+`9DBDECD30315334F01E75EBAD8757EAA07BED71668296AA3A319DFA212BAA95E`). R2 fixed
+Codex 0.144.4's required `default_permissions` selector and flattened CLI
+encoding for special filesystem keys; the exact generated arguments pass a
+real app-server startup smoke. R3 adds shell-free discovery of the standard
+per-user npm Codex entry when VS Code's extension-host `PATH` omits npm shims.
+Installed R3 live acceptance passed on 2026-07-17: native readiness gate,
+user-to-managed board event, claimed canonical workspace write and exact
+read-back, claim release, complete task lifecycle, 49-model Forge catalog,
+synchronous Codex worker, durable asynchronous Codex worker, and fail-closed
+unconfigured build. No claims, commands, or open tasks leaked. The worker route
+reported `codex-cli 0.144.2` while terminal/managed diagnostics had reported
+`0.144.4`; this non-blocking PATH/version skew remains a follow-up.
+Worker execution now has
+explicit platform context, mutation-time claim authorization, exhaustive
+terminal states, cumulative budgets, loop detection, durable async receipts,
+safe Git guidance, and richer Forge routing/availability validation. TypeScript
+and all 219 automated tests pass. The repo-only implementation and remaining
+installed/upstream gates are recorded in
+`docs/FORGE_RELAY_PIPELINE_REMEDIATION_PLAN_2026-07-17.md`.
 
 ## Released
 

@@ -6,6 +6,7 @@ import * as path from 'path';
 import { RuntimeManager } from '../src/runtimeManager';
 import { subagentEnvFromBackends, SubagentBackends } from '../src/subagent';
 import { Bridge } from '../src/bridge';
+import { resolveStdioSubagentBackends } from '../src/stdioBackends';
 
 const BACKENDS: SubagentBackends = {
     bridgeUrl: '',
@@ -26,6 +27,27 @@ test('subagentEnvFromBackends mirrors set values and omits empty ones', () => {
     // bridgeUrl '' (route off) and bridgeApiKey unset must not appear at all.
     assert.equal('FORGERELAY_BRIDGE_URL' in env, false);
     assert.equal('FORGERELAY_BRIDGE_API_KEY' in env, false);
+});
+
+test('standalone stdio discovers Forge control when the environment omits it', async () => {
+    const resolved = await resolveStdioSubagentBackends({
+        FORGERELAY_OLLAMA_URL: 'http://ollama/v1',
+    }, async explicit => ({
+        url: explicit || 'http://127.0.0.1:8799',
+        source: explicit ? 'setting' : 'registry',
+        detail: 'test discovery',
+    }));
+    assert.equal(resolved.backends.forgeControlUrl, 'http://127.0.0.1:8799');
+    assert.equal(resolved.backends.ollamaUrl, 'http://ollama/v1');
+    assert.equal(resolved.forge.source, 'registry');
+});
+
+test('standalone stdio keeps an explicit Forge control environment override', async () => {
+    const resolved = await resolveStdioSubagentBackends({
+        FORGERELAY_FORGE_CONTROL_URL: 'http://127.0.0.1:9900',
+    }, async explicit => ({ url: explicit, source: 'setting', detail: 'explicit' }));
+    assert.equal(resolved.backends.forgeControlUrl, 'http://127.0.0.1:9900');
+    assert.equal(resolved.forge.source, 'setting');
 });
 
 function makeManager(repoRoot: string, subagentEnv?: Record<string, string>): RuntimeManager {

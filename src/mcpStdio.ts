@@ -6,9 +6,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema, CallToolResult, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Bridge } from './bridge';
 import { EventTail } from './eventTail';
-import { DEFAULT_SUBAGENT_BACKENDS, SubagentBackends } from './subagent';
+import { SubagentBackends } from './subagent';
 import { BOARD_TOOL_SCHEMAS, executeBoardTool } from './boardTools';
 import { isVsCodeInstallDir, fallbackCoordinationRoot } from './vscodeInstallDir';
+import { resolveStdioSubagentBackends } from './stdioBackends';
 
 // repoRoot resolution order: FORGERELAY_REPO_ROOT env wins, then --repoRoot, then
 // cwd. The codex/claude auto-bridge injects FORGERELAY_REPO_ROOT with the actual
@@ -64,24 +65,7 @@ function logToolCall(tool: string, agent: string): void {
 // Subagent backends — defaults can be overridden via env vars so Codex (which
 // spawns this stdio server itself) can point at the same endpoints as the
 // extension without sharing VS Code settings.
-const subagentBackends: SubagentBackends = {
-    bridgeUrl: process.env.FORGERELAY_BRIDGE_URL || DEFAULT_SUBAGENT_BACKENDS.bridgeUrl,
-    ollamaUrl: process.env.FORGERELAY_OLLAMA_URL || DEFAULT_SUBAGENT_BACKENDS.ollamaUrl,
-    directUrl: process.env.FORGERELAY_DIRECT_URL || DEFAULT_SUBAGENT_BACKENDS.directUrl,
-    bridgeApiKey: process.env.FORGERELAY_BRIDGE_API_KEY || undefined,
-    defaultBackend: (process.env.FORGERELAY_DEFAULT_BACKEND as SubagentBackends['defaultBackend']) || DEFAULT_SUBAGENT_BACKENDS.defaultBackend,
-    forgeControlUrl: process.env.FORGERELAY_FORGE_CONTROL_URL || undefined,
-    defaultRunMode: (process.env.FORGERELAY_DEFAULT_MODE as SubagentBackends['defaultRunMode']) || DEFAULT_SUBAGENT_BACKENDS.defaultRunMode,
-    ollamaAutoStart: process.env.FORGERELAY_OLLAMA_AUTO_START === '1',
-    ollamaExecutable: process.env.FORGERELAY_OLLAMA_EXECUTABLE || undefined,
-    codexExecutable: process.env.FORGERELAY_CODEX_EXECUTABLE || undefined,
-    codexTimeoutMs: Number(process.env.FORGERELAY_CODEX_TIMEOUT_MS) || undefined,
-    buildCommand: process.env.FORGERELAY_BUILD_COMMAND || undefined,
-    buildClaimTargets: process.env.FORGERELAY_BUILD_CLAIM_TARGETS
-        ? process.env.FORGERELAY_BUILD_CLAIM_TARGETS.split(',').map(t => t.trim()).filter(Boolean)
-        : undefined,
-    buildTimeoutMs: Number(process.env.FORGERELAY_BUILD_TIMEOUT_MS) || undefined,
-};
+let subagentBackends: SubagentBackends;
 
 const server = new Server(
     { name: 'forgerelay', version: '0.1.0' },
@@ -113,6 +97,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToo
 });
 
 async function main() {
+    const resolved = await resolveStdioSubagentBackends(process.env);
+    subagentBackends = resolved.backends;
+    try {
+        fs.appendFileSync(
+            path.join(path.dirname(eventsPath), 'mcpstdio.log'),
+            `[${new Date().toISOString()}] forge-control=${resolved.forge.url ?? '(off)'} source=${resolved.forge.source} detail=${resolved.forge.detail}\n`,
+        );
+    } catch { /* routing diagnostics are best-effort */ }
     const transport = new StdioServerTransport();
     await server.connect(transport);
 

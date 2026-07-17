@@ -108,6 +108,7 @@ Use **Command Palette -> Forge Relay: Get Started** for one-shot onboarding: it 
 Or run the pieces individually:
 **Forge Relay: Configure Codex** writes the Codex `config.toml` entry; **Forge Relay: Configure Claude** writes the Claude `settings.json` entry;
 **Forge Relay: Show MCP Config** shows the exact snippets for this machine; **Forge Relay: Verify Setup** checks whether this machine is ready.
+After installing a development build, **Forge Relay: Run Runtime Acceptance Matrix** runs the live board, Forge route, managed-write, and Codex worker checks and opens a single pass/fail report.
 
 ### First-time setup on a new machine
 
@@ -130,6 +131,12 @@ Codex typically uses `~/.codex/config.toml`. Run **Forge Relay: Configure Codex*
 command = "node"
 args = ["/absolute/path/to/extension/out/mcpStdio.js"]
 ```
+
+Use **Configure Codex** or **Show MCP Config** for the complete generated block.
+It adds explicit `approval_mode = "approve"` sections for safe board and
+lifecycle/query tools, including `release`; worker dispatch and build execution
+are intentionally not auto-approved. Existing conflicting user approval policy
+is reported and never overwritten.
 
 Do **not** add a hardwired `--repoRoot` argument to this global entry — Codex
 resolves the board from each workspace's working directory, and a fixed
@@ -386,6 +393,7 @@ All state is local and git-ignored (`.coordination/` is in `.gitignore`).
 | `Forge Relay: Configure Claude` | Write the `forgerelay` MCP entry into `~/.claude/settings.json` (merges into existing JSON; never clobbers an existing entry) |
 | `Forge Relay: Show MCP Config` | Display copy-ready Codex and Claude MCP config snippets plus recovery notes |
 | `Forge Relay: Verify Setup` | Check whether Codex and Claude MCP config are correctly wired on this machine |
+| `Forge Relay: Run Runtime Acceptance Matrix` | Exercise live board, Forge routing, managed native writes, and sync/async Codex workers; open one report |
 | `Forge Relay: Toggle Clanker Mode` | Switch workers between read-only draft mode and write/edit/run (Clanker) mode |
 
 ---

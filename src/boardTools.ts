@@ -3,10 +3,11 @@ import { SubagentBackends, DISPATCH_SUBAGENT_TOOL, LIST_MODELS_TOOL, handleListM
 import { handleDispatchSubagent } from './subagentLoop';
 import { runCoordinatedBuild } from './buildWrapper';
 import { Task } from './types';
+import { readSubagentRun } from './subagentRuns';
 
 export const COORDINATOR_TOOL_NAMES = [
     'board_check', 'post', 'claim', 'release', 'ack_command', 'resolve_command',
-    'dispatch_subagent', 'list_models', 'get_status', 'run_build',
+    'dispatch_subagent', 'get_subagent_run', 'list_models', 'get_status', 'run_build',
     'create_task', 'update_task', 'assign_task', 'start_task', 'block_task', 'unblock_task', 'complete_task', 'cancel_task', 'list_tasks',
 ] as const;
 
@@ -19,6 +20,7 @@ export const BOARD_TOOL_SCHEMAS = [
     { name: 'ack_command', description: 'Acknowledge an operator command (e.g. STOP or PAUSE). Always ack before stopping work.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
     { name: 'resolve_command', description: 'Mark an operator command as resolved once work is stopped or paused.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, command_id: { type: 'string' }, note: { type: 'string' } }, required: ['agent', 'command_id'] } },
     DISPATCH_SUBAGENT_TOOL,
+    { name: 'get_subagent_run', description: 'Read the durable lifecycle state of an async subagent run by its runId.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, run_id: { type: 'string' } }, required: ['agent', 'run_id'] } },
     LIST_MODELS_TOOL,
     { name: 'run_build', description: 'Run the configured build command with board coordination: pre-flight check, claim the configured build target(s), run the command, post start/result, and release on success, failure, timeout, or operator STOP/PAUSE. The command itself is fixed by local config ("forgeRelay.build.command"), not by this call, so it cannot be redirected via arguments.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, note: { type: 'string', description: 'Optional context for the board post' } }, required: ['agent'] } },
     { name: 'create_task', description: 'Create a task card: persistent, board-visible work item with a lifecycle distinct from file claims and STOP/PAUSE commands.', inputSchema: { type: 'object', properties: { agent: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'Default: medium' }, owner: { type: 'string' } }, required: ['agent', 'title'] } },
@@ -62,6 +64,10 @@ export async function executeBoardTool(bridge: Bridge, backends: SubagentBackend
         case 'ack_command': bridge.ack(str(args.agent), str(args.command_id), str(args.note)); return `ACKNOWLEDGED ${str(args.command_id)}`;
         case 'resolve_command': bridge.resolve(str(args.agent), str(args.command_id), str(args.note)); return `RESOLVED ${str(args.command_id)}`;
         case 'dispatch_subagent': return handleDispatchSubagent(bridge, backends, args);
+        case 'get_subagent_run': {
+            const record = readSubagentRun(bridge.getRepoRoot(), str(args.run_id));
+            return record ? JSON.stringify(record) : `ERROR: unknown subagent run ${str(args.run_id)}`;
+        }
         case 'list_models': return handleListModels(backends);
         case 'run_build': return runCoordinatedBuild(bridge, backends, str(args.agent), str(args.note));
         case 'create_task': {

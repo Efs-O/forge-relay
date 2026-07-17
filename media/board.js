@@ -122,7 +122,12 @@ window.addEventListener('message', (/** @type {MessageEvent} */ event) => {
     }
     if (msg.type === 'forgeModels') {
         forgeModel.innerHTML = msg.models.length
-            ? msg.models.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}${m.servable === false ? ` (${esc(m.provider || 'provider')})` : ''}</option>`).join('')
+            ? msg.models.map((m) => {
+                const state = m.availability || (m.servable === false ? 'ready' : 'unknown');
+                const disabled = ['loading', 'busy', 'unavailable'].includes(state);
+                const detail = [m.servable === false ? (m.provider || 'provider') : '', state, m.availabilityReason || ''].filter(Boolean).join(', ');
+                return `<option value="${esc(m.name)}"${disabled ? ' disabled' : ''}>${esc(m.name)}${detail ? ` (${esc(detail)})` : ''}</option>`;
+            }).join('')
             : '<option value="">No Forge models available</option>';
         forgeModelError.textContent = msg.error || '';
     }

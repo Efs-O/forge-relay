@@ -6,9 +6,20 @@ import { SubagentBackends, ResolvedModel, chatCompletionRaw, forgeEnsure, forgeR
 import { BOARD_TOOL_SCHEMAS, executeBoardTool } from './boardTools';
 import { BoardEvent } from './types';
 import { CompletionResponse, runToolCompletionRound } from './toolCompletionRound';
+import { ToolLoopGuard } from './toolLoopGuard';
 const { shouldTrigger } = require('../scripts/bridgeEventFilter') as { shouldTrigger: (event: BoardEvent, agent: string, mode?: string) => boolean };
 
-export interface ForgeCoordinatorModel { name: string; profile?: string; profiles?: string[]; servable?: boolean; provider?: string; }
+export interface ForgeCoordinatorModel {
+    name: string;
+    profile?: string;
+    profiles?: string[];
+    servable?: boolean;
+    provider?: string;
+    backend?: string;
+    route?: 'ensure' | 'chat';
+    availability?: 'ready' | 'loadable' | 'loading' | 'busy' | 'degraded' | 'unavailable' | 'unknown';
+    availabilityReason?: string;
+}
 export interface ForgeCoordinatorOptions {
     bridge: Bridge;
     backends: SubagentBackends;
@@ -37,6 +48,7 @@ export class ForgeCoordinatorBridge {
     private held = false;
     private requiresHold = true;
     private resolved: ResolvedModel | null = null;
+    private selectedEntry: ForgeCoordinatorModel | null = null;
     private abort: AbortController | null = null;
     private history: Message[] = [];
     private stoppingForCommand = false;
@@ -50,11 +62,15 @@ export class ForgeCoordinatorBridge {
     static async listModels(controlUrl: string): Promise<ForgeCoordinatorModel[]> {
         const res = await fetch(`${controlUrl.replace(/\/$/, '')}/models`, { signal: AbortSignal.timeout(5000) });
         if (!res.ok) throw new Error(`Forge /models HTTP ${res.status}`);
-        const data = await res.json() as { models?: ForgeCoordinatorModel[] };
+        const data = await res.json() as { models?: Array<ForgeCoordinatorModel & { reason?: string }> };
         const profileRank = (profile?: string) => profile === 'main' ? 0 : profile === 'subcoordinator' ? 1 : 2;
-        return (data.models ?? []).flatMap(model => model.profiles?.length
-            ? model.profiles.map(profile => ({ ...model, name: `${model.name}@${profile}`, profile, profiles: undefined }))
-            : [model])
+        return (data.models ?? []).flatMap(raw => {
+            const reason = raw.availabilityReason ?? raw.reason;
+            const model = { ...raw, ...(reason ? { availabilityReason: reason } : {}) };
+            return model.profiles?.length
+                ? model.profiles.map(profile => ({ ...model, name: `${model.name}@${profile}`, profile, profiles: undefined }))
+                : [model];
+        })
             // Coordinator dropdown: @main entries first so the usual pick is near the top.
             .sort((a, b) => profileRank(a.profile) - profileRank(b.profile) || a.name.localeCompare(b.name));
     }
@@ -74,9 +90,15 @@ export class ForgeCoordinatorBridge {
         this.model = model;
         try {
             const catalog = await ForgeCoordinatorBridge.listModels(this.opts.controlUrl);
-            this.requiresHold = catalog.find(entry => entry.name === model)?.servable !== false;
+            const entry = catalog.find(candidate => candidate.name === model);
+            if (!entry) throw new Error(`Selected Forge coordinator model "${model}" is stale or missing from the current catalog.`);
+            if (entry.availability === 'loading' || entry.availability === 'busy' || entry.availability === 'unavailable') {
+                throw new Error(`Forge coordinator model "${model}" is ${entry.availability}${entry.availabilityReason ? ` (${entry.availabilityReason})` : ''}.`);
+            }
+            this.selectedEntry = entry;
+            this.requiresHold = entry.route ? entry.route === 'ensure' : entry.servable !== false;
             if (this.requiresHold) {
-                await forgeEnsure(this.opts.controlUrl, model);
+                this.validateEnsure(await forgeEnsure(this.opts.controlUrl, model));
                 await forgeRelease(this.opts.controlUrl, model);
             }
         } catch (err) {
@@ -104,6 +126,7 @@ export class ForgeCoordinatorBridge {
         if (this.requiresHold && this.held && this.model) await forgeRelease(this.opts.controlUrl, this.model);
         this.held = false;
         this.resolved = null;
+        this.selectedEntry = null;
         this.lease.releaseIfOwned();
         this.opts.onStatus?.('inactive', 'Forge coordinator disconnected.');
     }
@@ -134,6 +157,7 @@ export class ForgeCoordinatorBridge {
             if (this.requiresHold) {
                 if (!this.held) {
                     const ensured = await forgeEnsure(this.opts.controlUrl, this.model);
+                    this.validateEnsure(ensured);
                     this.resolved = { backend: ensured.backend, model: ensured.model, baseUrl: ensured.baseUrl };
                     this.held = true;
                 }
@@ -202,6 +226,7 @@ export class ForgeCoordinatorBridge {
 
     private async runToolLoop(): Promise<void> {
         let usedTools = false;
+        const loopGuard = new ToolLoopGuard();
         for (let step = 0; step < 12; step++) {
             if (this.opts.bridge.getBlockingCommands(AGENT).length) { this.abort?.abort(); return; }
             const round = await runToolCompletionRound({
@@ -216,16 +241,19 @@ export class ForgeCoordinatorBridge {
                         tool_choice: 'auto',
                     }, this.abort?.signal) as Promise<CompletionResponse>;
                 },
-                beforeTool: () => {
+                beforeTool: (name, args) => {
                     if (this.opts.bridge.getBlockingCommands(AGENT).length) {
                         this.abort?.abort();
                         throw new DOMException('Coordinator stopped before tool execution.', 'AbortError');
                     }
+                    loopGuard.beforeCall(name, args);
                 },
                 executeTool: async (name, args) => {
                     args.agent = AGENT;
-                    return executeBoardTool(this.opts.bridge, this.opts.backends, name, args)
+                    const result = await executeBoardTool(this.opts.bridge, this.opts.backends, name, args)
                         .catch(err => `ERROR: ${err instanceof Error ? err.message : String(err)}`);
+                    loopGuard.afterCall(result);
+                    return result;
                 },
                 missingMessageError: 'Forge /chat returned no assistant message',
                 emptyLengthError: 'coordinator produced no output and hit the token limit (reasoning/length overflow)',
@@ -248,6 +276,15 @@ export class ForgeCoordinatorBridge {
             if (this.requiresHold && this.held) await forgeRelease(this.opts.controlUrl, this.model);
             this.held = false;
         })(), this.opts.idleReleaseMs ?? 300_000);
+    }
+
+    private validateEnsure(ensured: { model: string; backend: string }): void {
+        if (ensured.model !== this.model) {
+            throw new Error(`Forge routing drift: selected "${this.model}" but /ensure resolved "${ensured.model}".`);
+        }
+        if (this.selectedEntry?.backend && ensured.backend !== this.selectedEntry.backend) {
+            throw new Error(`Forge backend drift for "${this.model}": catalog=${this.selectedEntry.backend}, ensure=${ensured.backend}.`);
+        }
     }
 
     private trimHistory(): void {

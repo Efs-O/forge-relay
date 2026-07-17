@@ -22,6 +22,11 @@ export interface CodexManagedProfile {
     env: Readonly<{ CODEX_HOME: string; CODEX_SQLITE_HOME: string }>;
 }
 
+export const MANAGED_CLANKER_PERMISSION_PROFILE = 'forge-relay-clanker';
+
+type ManagedConfigValue = string | number | boolean | readonly ManagedConfigValue[]
+    | { readonly [key: string]: ManagedConfigValue };
+
 export function codexManagedIsolationOverrides(profile: CodexManagedProfile): Readonly<{
     sqlite_home: string;
     cli_auth_credentials_store: 'file';
@@ -31,6 +36,42 @@ export function codexManagedIsolationOverrides(profile: CodexManagedProfile): Re
         sqlite_home: profile.sqliteHome,
         cli_auth_credentials_store: 'file',
         forced_login_method: 'chatgpt',
+    });
+}
+
+/**
+ * Runtime-only policy for the isolated app-server.
+ *
+ * The built-in `:workspace` profile grants writable temp roots. On native
+ * Windows that commonly produces a split-root set (for example repo on N: and
+ * temp on C:) which the unelevated sandbox refuses for apply_patch. Relay's
+ * profile deliberately grants write access only to the runtime workspace roots
+ * while keeping protected metadata directories read-only.
+ */
+export function codexManagedRuntimeOverrides(
+    profile: CodexManagedProfile,
+    platform: NodeJS.Platform = process.platform,
+): Readonly<Record<string, ManagedConfigValue>> {
+    const id = MANAGED_CLANKER_PERMISSION_PROFILE;
+    return Object.freeze({
+        ...codexManagedIsolationOverrides(profile),
+        // Codex refuses startup when any custom permissions table exists but
+        // no default selector is configured. Turns still explicitly request
+        // :read-only (draft) or this profile (Clanker).
+        default_permissions: id,
+        // Codex 0.144.x CLI overrides parse a complete filesystem inline table
+        // as a string. Flatten the two scalar rules and keep only the scoped
+        // workspace map as an inline table, matching the documented TOML shape.
+        [`permissions.${id}.filesystem.:minimal`]: 'read',
+        [`permissions.${id}.filesystem.:root`]: 'read',
+        [`permissions.${id}.filesystem.:workspace_roots`]: {
+            '.': 'write',
+            '.git': 'read',
+            '.agents': 'read',
+            '.codex': 'read',
+        },
+        [`permissions.${id}.network.enabled`]: false,
+        ...(platform === 'win32' ? { 'windows.sandbox': 'unelevated' } : {}),
     });
 }
 

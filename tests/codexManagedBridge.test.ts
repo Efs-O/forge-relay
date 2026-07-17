@@ -9,9 +9,12 @@ import {
     CodexManagedBoard,
     CodexManagedLease,
     classifyCodexManagedFailure,
+    canonicalManagedWorkspaceRoot,
+    managedPermissionsProfile,
     resolveManagedCodexServerRequest,
 } from '../src/codexManagedBridge';
 import { BoardEvent, Command } from '../src/types';
+import { MANAGED_CLANKER_PERMISSION_PROFILE } from '../src/codexManagedProfile';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -33,6 +36,16 @@ class FakeClient implements CodexAppServerAdapter {
     turnCounter = 0;
     onInterrupt?: (params: Record<string, unknown>) => void;
     onTurnStart?: (turnId: string, params: Record<string, unknown>) => void;
+    threadCwd?: string;
+    threadRuntimeWorkspaceRoots?: unknown[];
+    omitRuntimeWorkspaceRoots = false;
+    activePermissionProfileId?: string;
+    omitActivePermissionProfile = false;
+    commandExecResult: Record<string, unknown> = {
+        exitCode: 0,
+        stdout: 'forge-relay-create|forge-relay-update',
+        stderr: '',
+    };
     private notificationListeners = new Set<(notification: { method: string; params?: unknown }) => void>();
     private closeListeners = new Set<(error?: Error) => void>();
     private requestListener?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -43,12 +56,22 @@ class FakeClient implements CodexAppServerAdapter {
         this.requests.push({ method, params });
         if (method === 'initialize') return {} as T;
         if (method === 'account/read') return this.account as T;
-        if (method === 'thread/start') return { thread: { id: `thread-${this.childPid}` } } as T;
+        if (method === 'thread/start') return {
+            thread: { id: `thread-${this.childPid}` },
+            cwd: this.threadCwd ?? params.cwd,
+            ...(!this.omitActivePermissionProfile ? {
+                activePermissionProfile: { id: this.activePermissionProfileId ?? params.permissions },
+            } : {}),
+            ...(!this.omitRuntimeWorkspaceRoots ? {
+                runtimeWorkspaceRoots: this.threadRuntimeWorkspaceRoots ?? params.runtimeWorkspaceRoots,
+            } : {}),
+        } as T;
         if (method === 'turn/start') {
             const turnId = `turn-${++this.turnCounter}`;
             this.onTurnStart?.(turnId, params);
             return { turn: { id: turnId } } as T;
         }
+        if (method === 'command/exec') return this.commandExecResult as T;
         if (method === 'turn/interrupt') {
             this.onInterrupt?.(params);
             return {} as T;
@@ -86,10 +109,14 @@ class FakeBoard implements CodexManagedBoard {
     posts: string[] = [];
     acks: string[] = [];
     autonomy: 'draft' | 'clanker' = 'draft';
+    claims: string[] = [];
+    releases: string[] = [];
     getBlockingCommands(): Command[] { return this.commands.filter(command => command.status !== 'resolved'); }
     getAutonomyMode(): 'draft' | 'clanker' { return this.autonomy; }
     ack(_agent: string, commandId: string): void { this.acks.push(commandId); }
     post(_agent: string, message: string): void { this.posts.push(message); }
+    claim(_agent: string, targets: string[]): void { this.claims.push(...targets); }
+    release(_agent: string, targets: string[]): void { this.releases.push(...targets); }
 }
 
 class FakeLease implements CodexManagedLease {
@@ -130,12 +157,20 @@ function fixture(t: Parameters<typeof test>[1] extends (t: infer T) => unknown ?
     return { root, eventsPath, board, lease, clients, statuses, bridge };
 }
 
-test('managed bridge initializes, authenticates, starts one persistent thread, and cleans up', async (t) => {
-    const { bridge, clients, lease, statuses } = fixture(t);
+test('managed bridge initializes with a canonical workspace and cleans up', async (t) => {
+    const { bridge, clients, lease, statuses, root } = fixture(t);
     await bridge.start();
     const client = clients[0];
     assert.deepEqual(client.requests.map(request => request.method), ['initialize', 'account/read', 'thread/start']);
     assert.deepEqual(client.notifications.map(notification => notification.method), ['initialized']);
+    const initialize = client.requests.find(request => request.method === 'initialize')!;
+    assert.deepEqual(initialize.params.capabilities, { experimentalApi: true });
+    const start = client.requests.find(request => request.method === 'thread/start')!;
+    const workspace = canonicalManagedWorkspaceRoot(root);
+    assert.equal(start.params.cwd, workspace);
+    assert.deepEqual(start.params.runtimeWorkspaceRoots, [workspace]);
+    assert.equal(start.params.permissions, ':read-only');
+    assert.equal('sandbox' in start.params, false);
     assert.equal(bridge.activeThreadId(), 'thread-4321');
     assert.equal(lease.childPid, 4321);
     assert.equal(statuses.at(-1), 'linked');
@@ -284,6 +319,73 @@ test('fatal authentication and same-profile ownership failures release without r
     assert.equal(held.bridge.status(), 'stopped');
     assert.match(held.bridge.detailText(), /another Forge Relay runtime/);
     assert.doesNotMatch(held.bridge.detailText(), /close other Codex app-server/i);
+});
+
+test('clanker turns use the workspace permission profile with explicit project roots', async (t) => {
+    const { bridge, clients, eventsPath, board, root } = fixture(t);
+    board.autonomy = 'clanker';
+    await bridge.start();
+    append(eventsPath, event('user', 'write inside the repo'));
+    await bridge.pollEventsNow();
+    await waitFor(() => clients[0].requests.some(request => request.method === 'turn/start'), 'clanker turn');
+    const turn = clients[0].requests.find(request => request.method === 'turn/start')!;
+    const workspace = canonicalManagedWorkspaceRoot(root);
+    assert.equal(turn.params.cwd, workspace);
+    assert.deepEqual(turn.params.runtimeWorkspaceRoots, [workspace]);
+    assert.equal(turn.params.permissions, MANAGED_CLANKER_PERMISSION_PROFILE);
+    assert.equal('sandboxPolicy' in turn.params, false);
+    const probe = clients[0].requests.find(request => request.method === 'command/exec')!;
+    assert.equal(probe.params.permissionProfile, MANAGED_CLANKER_PERMISSION_PROFILE);
+    assert.equal(probe.params.cwd, workspace);
+    assert.deepEqual(board.claims, board.releases);
+});
+
+test('managed startup fails closed when app-server omits or changes runtime workspace roots', async (t) => {
+    for (const [label, configure] of [
+        ['missing roots', (client: FakeClient) => { client.omitRuntimeWorkspaceRoots = true; }],
+        ['wrong root', (client: FakeClient) => { client.threadRuntimeWorkspaceRoots = [path.dirname(process.cwd())]; }],
+        ['extra root', (client: FakeClient) => { client.threadRuntimeWorkspaceRoots = [process.cwd(), path.dirname(process.cwd())]; }],
+    ] as const) {
+        const subject = fixture(t);
+        const client = new FakeClient();
+        configure(client);
+        (subject.bridge as unknown as { opts: { clientFactory: () => FakeClient } }).opts.clientFactory = () => client;
+        await assert.rejects(subject.bridge.start(), /runtime workspace roots mismatch/, label);
+        assert.equal(subject.bridge.status(), 'error', label);
+        assert.equal(subject.lease.released, 1, label);
+    }
+});
+
+test('managed startup fails closed when app-server omits or changes the active permission profile', async (t) => {
+    for (const [label, configure] of [
+        ['missing profile', (client: FakeClient) => { client.omitActivePermissionProfile = true; }],
+        ['wrong profile', (client: FakeClient) => { client.activePermissionProfileId = ':danger-full-access'; }],
+    ] as const) {
+        const subject = fixture(t);
+        const client = new FakeClient();
+        configure(client);
+        (subject.bridge as unknown as { opts: { clientFactory: () => FakeClient } }).opts.clientFactory = () => client;
+        await assert.rejects(subject.bridge.start(), /permissions mismatch/, label);
+        assert.equal(subject.bridge.status(), 'error', label);
+        assert.equal(subject.lease.released, 1, label);
+    }
+});
+
+test('managed permission helper keeps draft read-only and clanker workspace-scoped', () => {
+    assert.equal(managedPermissionsProfile('draft'), ':read-only');
+    assert.equal(managedPermissionsProfile('clanker'), MANAGED_CLANKER_PERMISSION_PROFILE);
+});
+
+test('managed Clanker fails closed before a model turn when native workspace acceptance fails', async (t) => {
+    const subject = fixture(t);
+    subject.board.autonomy = 'clanker';
+    const client = new FakeClient();
+    client.commandExecResult = { exitCode: 1, stdout: '', stderr: 'sandbox refused split roots' };
+    (subject.bridge as unknown as { opts: { clientFactory: () => FakeClient } }).opts.clientFactory = () => client;
+    await assert.rejects(subject.bridge.start(), /Clanker acceptance failed.*split roots/);
+    assert.equal(client.requests.some(request => request.method === 'turn/start'), false);
+    assert.deepEqual(subject.board.claims, subject.board.releases);
+    assert.equal(classifyCodexManagedFailure(new Error('Managed Codex Clanker acceptance failed')), 'fatal-protocol');
 });
 
 test('only the active Forge Relay MCP tool elicitation is accepted', () => {

@@ -4,9 +4,9 @@
 
 **Branch:** `feat/managed-codex-relay`
 
-**Status:** Revised after the 0.7.0 prototype. ChatGPT Codex subscription usage
-is a hard product requirement. Do not merge to `main` until the subscription
-OAuth and concurrency acceptance gates pass.
+**Status:** Installed R3 managed subscription runtime and independent Codex
+worker acceptance pass. Do not merge to `main` until second-workspace,
+STOP/restart, and token-refresh/soak gates pass.
 
 ## 1. Correction to the 0.7.0 prototype
 
@@ -286,7 +286,9 @@ Tests must prove:
 3. Confirm `account/read` reports `chatgpt` and the expected plan type.
 4. **Passed 2026-07-17 on 0.8.2:** start managed Codex and complete a real
    board-event turn/MCP post.
-5. Run an independent subscription-backed terminal Codex task concurrently.
+5. **Passed 2026-07-17 on installed R3:** an independent subscription-backed
+   synchronous worker and durable asynchronous worker completed while managed
+   Codex remained connected.
 6. Sign in and start a second workspace profile concurrently.
 7. Confirm all external PIDs remain alive and each managed profile routes only
    to its own workspace board.
@@ -364,20 +366,30 @@ that the subscription requirement is met.
   reply. This is expected: the shared event filter suppresses self-authored
   events to prevent an infinite `codex -> codex` feedback loop. Use a `user` or
   different-agent post for future connectivity acceptance.
+- Installed R3 (`forge-relay-subscription-codex-experimental-0.8.2-batch-fixes-r3.vsix`,
+  SHA-256 `9DBDECD30315334F01E75EBAD8757EAA07BED71668296AA3A319DFA212BAA95E`)
+  passed the native startup gate and a real claimed write/read-back/release at
+  `docs/managed-clanker-write-smoke.md`. Board task lifecycle, the 49-model
+  Forge catalog, synchronous worker, durable asynchronous worker, and
+  fail-closed unconfigured build also passed with no leaked board state.
+- The worker catalog reported `codex-cli 0.144.2`, while earlier terminal and
+  managed diagnostics reported `0.144.4`. Both live paths passed, but the
+  client-specific PATH/version skew should be normalized or documented.
 
 ### Corrected evidence still required before merge
 
 - Record the returned subscription plan type explicitly; successful managed
   startup already proves the enforced `account.type == "chatgpt"` check passed.
-- CLI/worker and second-workspace concurrency.
+- Second-workspace concurrency.
 - STOP/restart isolation.
 - Token refresh/soak with no invalidation.
 
 ### Next-session resume point
 
-Start from installed experimental version 0.8.2 and commit `19f8695`. Do not
-rework login, PID isolation, or MCP elicitation unless new evidence regresses
-the successful user-to-managed-Codex board reply. Continue with the remaining
-acceptance gates in this order: independent subscription-backed CLI/worker,
-second workspace, STOP/restart isolation, then token-refresh soak. Keep board
-mode off unless the operator explicitly activates it in the new session.
+Start from installed R3 and the successful managed-write plus sync/async worker
+evidence. Do not rework login, PID isolation, permission encoding, executable
+discovery, or MCP elicitation unless new evidence regresses those paths.
+Continue with second-workspace concurrency, STOP/restart isolation, then
+token-refresh soak. Separately normalize or document the worker `0.144.2` versus
+managed/terminal `0.144.4` resolution. Keep board mode off unless the operator
+explicitly activates it in the new session.

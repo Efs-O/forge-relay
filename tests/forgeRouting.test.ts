@@ -59,6 +59,7 @@ test('decideForgeRoute sends local bare ids to Forge control', () => {
     assert.equal(route.kind, 'forge-control');
     if (route.kind !== 'forge-control') { return; }
     assert.equal(route.model, 'gemma-local');
+    assert.equal(route.expectedBackend, 'llamacpp');
     assert.equal(route.canonical, 'forge:gemma-local');
 });
 
@@ -157,6 +158,35 @@ test('decideForgeRoute fails clearly when a bare id is missing from Forge catalo
     assert.equal(route.kind, 'error');
     if (route.kind !== 'error') { return; }
     assert.match(route.message, /not found in the Forge control or Forge bridge catalogs/i);
+});
+
+test('decideForgeRoute rejects unavailable and stale explicit Forge selections', () => {
+    const unavailable: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe } = {
+        control: {
+            backend: 'forge-control', baseUrl: BACKENDS.forgeControlUrl!, ok: true,
+            models: [{ name: 'busy-model', canonical: 'forge:busy-model', routeFamily: 'forge-control', availability: 'busy', availabilityReason: 'capacity_full' }],
+        },
+        bridge: { backend: 'forge-bridge', baseUrl: '', ok: false, models: [] },
+    };
+    const busy = decideForgeRoute('busy-model', BACKENDS, unavailable);
+    assert.equal(busy.kind, 'error');
+    if (busy.kind === 'error') assert.match(busy.message, /busy.*capacity_full/i);
+    const stale = decideForgeRoute('forge:missing', BACKENDS, unavailable);
+    assert.equal(stale.kind, 'error');
+    if (stale.kind === 'error') assert.match(stale.message, /current Forge control catalog/i);
+});
+
+test('explicit catalog route overrides legacy servable inference', () => {
+    const catalog: { control: ForgeCatalogProbe; bridge: ForgeCatalogProbe } = {
+        control: {
+            backend: 'forge-control', baseUrl: BACKENDS.forgeControlUrl!, ok: true,
+            models: [{ name: 'cloud', canonical: 'forge:cloud', routeFamily: 'forge-control', servable: true, route: 'chat', availability: 'ready' }],
+        },
+        bridge: { backend: 'forge-bridge', baseUrl: '', ok: false, models: [] },
+    };
+    const route = decideForgeRoute('cloud', BACKENDS, catalog);
+    assert.equal(route.kind, 'resolved');
+    if (route.kind === 'resolved') assert.equal(route.resolved.backend, 'forge-chat');
 });
 
 test('handleListModels returns a merged Forge-first view and flags ambiguous names explicitly', async () => {

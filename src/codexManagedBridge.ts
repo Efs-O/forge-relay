@@ -1,6 +1,9 @@
 import { EventTail } from './eventTail';
+import * as fs from 'fs';
+import * as path from 'path';
 import { RuntimeStatus } from './runtimeBridge';
 import { BoardEvent, Command } from './types';
+import { MANAGED_CLANKER_PERMISSION_PROFILE } from './codexManagedProfile';
 
 const { shouldTrigger } = require('../scripts/bridgeEventFilter') as {
     shouldTrigger: (event: BoardEvent, agent: string, mode?: string) => boolean;
@@ -36,6 +39,8 @@ export interface CodexManagedBoard {
     getAutonomyMode(): 'draft' | 'clanker';
     ack(agent: string, commandId: string, note: string): void;
     post(agent: string, message: string): void;
+    claim(agent: string, targets: string[], ttlMinutes: number, note: string): void;
+    release(agent: string, targets: string[], note: string): void;
 }
 
 export interface CodexManagedBridgeOptions {
@@ -58,6 +63,7 @@ export interface CodexManagedBridgeOptions {
     restartMaxMs?: number;
     maxRestarts?: number;
     maxFallbackPostChars?: number;
+    acceptanceCommand?: string;
     onStatus?: (status: RuntimeStatus, detail: string, threadId?: string) => void;
     onLog?: (line: string) => void;
 }
@@ -151,7 +157,7 @@ export function classifyCodexManagedFailure(error: unknown): CodexFailureKind {
     if (/managed profile (?:ownership )?lease|managed profile is (?:already )?owned|held by (?:another|live)|contention/i.test(message)) {
         return 'fatal-contention';
     }
-    if (/unsupported protocol|malformed protocol|method not found|invalid initialize|mcp .*failed to (?:start|initialize)|required mcp/i.test(message)) {
+    if (/unsupported protocol|malformed protocol|method not found|invalid initialize|mcp .*failed to (?:start|initialize)|required mcp|clanker acceptance failed/i.test(message)) {
         return 'fatal-protocol';
     }
     return 'transient';
@@ -212,6 +218,15 @@ function boundedMessage(message: string, max: number): string {
     return message.replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+export function canonicalManagedWorkspaceRoot(repoRoot: string): string {
+    const resolved = path.resolve(repoRoot);
+    try { return fs.realpathSync.native(resolved); } catch { return resolved; }
+}
+
+export function managedPermissionsProfile(autonomy: 'draft' | 'clanker'): ':read-only' | typeof MANAGED_CLANKER_PERMISSION_PROFILE {
+    return autonomy === 'clanker' ? MANAGED_CLANKER_PERMISSION_PROFILE : ':read-only';
+}
+
 /**
  * Product-level managed Codex coordinator. Transport and isolated-profile
  * ownership are adapters so those policies do not leak into the board/turn
@@ -239,9 +254,12 @@ export class CodexManagedBridge {
     private detail = 'Not connected.';
     private readonly acknowledgedCommands = new Set<string>();
     private subscriptions: Array<() => void> = [];
+    private readonly workspaceRoot: string;
+    private clankerAcceptancePassed = false;
 
     constructor(private readonly opts: CodexManagedBridgeOptions) {
         this.tail = new EventTail(opts.eventsPath);
+        this.workspaceRoot = canonicalManagedWorkspaceRoot(opts.repoRoot);
     }
 
     status(): RuntimeStatus { return this.currentStatus; }
@@ -354,7 +372,11 @@ export class CodexManagedBridge {
         if (childPid !== undefined) this.opts.lease.markBridgeStarted?.(childPid);
         await client.request('initialize', {
             clientInfo: { name: 'forge-relay-managed-codex', version: '1' },
-            capabilities: { experimentalApi: false },
+            // Codex 0.144.4 exposes runtimeWorkspaceRoots and named permission
+            // profiles as experimental app-server fields. Managed sessions
+            // need both: roots define the project boundary and the selected
+            // profile grants read-only or workspace-scoped write access.
+            capabilities: { experimentalApi: true },
         });
         await client.notify('initialized', {});
         const accountResult = await client.request<Record<string, unknown>>('account/read', { refreshToken: false });
@@ -365,16 +387,41 @@ export class CodexManagedBridge {
         if (account.type !== 'chatgpt') {
             throw new Error('Managed Codex profile is not authenticated with ChatGPT subscription access.');
         }
+        const permissions = managedPermissionsProfile(this.opts.board.getAutonomyMode());
         const thread = await client.request<Record<string, unknown>>('thread/start', {
-            cwd: this.opts.repoRoot,
+            cwd: this.workspaceRoot,
+            runtimeWorkspaceRoots: [this.workspaceRoot],
             approvalPolicy: 'never',
-            sandbox: this.opts.board.getAutonomyMode() === 'clanker' ? 'workspace-write' : 'read-only',
+            permissions,
             ...(this.opts.model ? { model: this.opts.model } : {}),
             developerInstructions: this.opts.developerInstructions ?? this.defaultInstructions(),
             ephemeral: true,
         });
-        this.threadId = idFrom(record(thread.thread).id) ?? idFrom(thread.threadId);
+        const threadRecord = record(thread.thread);
+        const returnedCwdValue = typeof thread.cwd === 'string' ? thread.cwd : threadRecord.cwd;
+        const returnedCwd = typeof returnedCwdValue === 'string' ? canonicalManagedWorkspaceRoot(returnedCwdValue) : undefined;
+        if (returnedCwd && returnedCwd.toLowerCase() !== this.workspaceRoot.toLowerCase()) {
+            throw new Error(`Managed Codex thread workspace mismatch: expected ${this.workspaceRoot}, received ${returnedCwd}.`);
+        }
+        const rawRuntimeRoots = Array.isArray(thread.runtimeWorkspaceRoots)
+            ? thread.runtimeWorkspaceRoots
+            : (Array.isArray(threadRecord.runtimeWorkspaceRoots) ? threadRecord.runtimeWorkspaceRoots : []);
+        const returnedRuntimeRoots = rawRuntimeRoots
+            .filter((value): value is string => typeof value === 'string')
+            .map(canonicalManagedWorkspaceRoot);
+        if (returnedRuntimeRoots.length !== 1 || returnedRuntimeRoots[0].toLowerCase() !== this.workspaceRoot.toLowerCase()) {
+            throw new Error(`Managed Codex runtime workspace roots mismatch: expected only ${this.workspaceRoot}; app-server returned ${returnedRuntimeRoots.length ? returnedRuntimeRoots.join(', ') : 'none'}.`);
+        }
+        const activePermissionProfile = record(thread.activePermissionProfile);
+        if (activePermissionProfile.id !== permissions) {
+            throw new Error(`Managed Codex permissions mismatch: requested ${permissions}; app-server returned ${typeof activePermissionProfile.id === 'string' ? activePermissionProfile.id : 'none'}.`);
+        }
+        this.threadId = idFrom(threadRecord.id) ?? idFrom(thread.threadId);
         if (!this.threadId) throw new Error('Malformed protocol response: thread/start returned no thread id.');
+        this.clankerAcceptancePassed = false;
+        if (this.opts.board.getAutonomyMode() === 'clanker') {
+            await this.runClankerAcceptanceProbe(client);
+        }
         this.restartAttempts = 0;
         this.opts.lease.renewHealthy?.('linked');
         this.setStatus('linked', 'Managed Codex linked and waiting for board events.', this.threadId);
@@ -477,6 +524,9 @@ export class CodexManagedBridge {
             await this.pollBlockingNow();
             return;
         }
+        if (this.opts.board.getAutonomyMode() === 'clanker') {
+            await this.runClankerAcceptanceProbe(client);
+        }
         const active = this.makeActive(events, threadId);
         this.active = active;
         this.setStatus('linked', `Managed Codex handling ${events.length} board event(s).`, threadId);
@@ -484,8 +534,10 @@ export class CodexManagedBridge {
             const response = await client.request<Record<string, unknown>>('turn/start', {
                 threadId,
                 input: buildCodexManagedTurnInput(events),
+                cwd: this.workspaceRoot,
+                runtimeWorkspaceRoots: [this.workspaceRoot],
                 approvalPolicy: 'never',
-                sandboxPolicy: { type: this.opts.board.getAutonomyMode() === 'clanker' ? 'workspaceWrite' : 'readOnly' },
+                permissions: managedPermissionsProfile(this.opts.board.getAutonomyMode()),
             });
             active.turnId = idFrom(record(response.turn).id) ?? idFrom(response.turnId);
             if (!active.turnId) throw new Error('Malformed protocol response: turn/start returned no turn id.');
@@ -645,6 +697,47 @@ export class CodexManagedBridge {
         }
         if (kind === 'fatal-protocol') return `Managed Codex protocol setup failed; use MCP-only mode until Codex is compatible. ${message}`;
         return `Managed Codex startup failed: ${message}`;
+    }
+
+    /**
+     * Deterministic native-runtime gate for Clanker mode. It proves that the
+     * selected permission profile can create, update, read, and delete a file
+     * in the canonical workspace before a model turn is allowed to mutate it.
+     */
+    async runClankerAcceptanceProbe(client = this.client, force = false): Promise<void> {
+        if (this.clankerAcceptancePassed && !force) return;
+        if (!client) throw new Error('Managed Codex Clanker acceptance failed: app-server is not connected.');
+        const relativeTarget = `.forge-relay-managed-acceptance-${process.pid}-${this.generation}.tmp`;
+        const absoluteTarget = path.join(this.workspaceRoot, relativeTarget);
+        const expected = 'forge-relay-create|forge-relay-update';
+        this.opts.board.claim(AGENT, [relativeTarget], 5, 'Managed Clanker native workspace acceptance probe');
+        try {
+            const script = [
+                "const fs=require('node:fs')",
+                'const p=process.argv[1]',
+                "fs.writeFileSync(p,'forge-relay-create','utf8')",
+                "fs.appendFileSync(p,'|forge-relay-update','utf8')",
+                "const value=fs.readFileSync(p,'utf8')",
+                'fs.unlinkSync(p)',
+                'process.stdout.write(value)',
+            ].join(';');
+            const response = record(await client.request<Record<string, unknown>>('command/exec', {
+                command: [this.opts.acceptanceCommand ?? 'node', '-e', script, absoluteTarget],
+                cwd: this.workspaceRoot,
+                permissionProfile: MANAGED_CLANKER_PERMISSION_PROFILE,
+                timeoutMs: 15_000,
+            }));
+            if (response.exitCode !== 0 || response.stdout !== expected || fs.existsSync(absoluteTarget)) {
+                throw new Error(`exit=${String(response.exitCode)} stdout=${JSON.stringify(response.stdout)} stderr=${JSON.stringify(response.stderr)}`);
+            }
+            this.clankerAcceptancePassed = true;
+            this.opts.onLog?.('Managed Codex Clanker acceptance passed: native create/update/read/delete in canonical workspace.');
+        } catch (error) {
+            throw new Error(`Managed Codex Clanker acceptance failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            try { if (fs.existsSync(absoluteTarget)) fs.rmSync(absoluteTarget, { force: true }); } catch { /* exact probe cleanup only */ }
+            try { this.opts.board.release(AGENT, [relativeTarget], 'Managed Clanker native workspace acceptance probe complete'); } catch { /* claim may have expired */ }
+        }
     }
 
     private setStatus(status: RuntimeStatus, detail: string, threadId = this.threadId): void {
