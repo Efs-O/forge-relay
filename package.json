@@ -1,8 +1,8 @@
 {
   "name": "forge-relay",
-  "displayName": "Forge Relay (Isolated Codex Experimental)",
+  "displayName": "Forge Relay (Subscription Codex Experimental)",
   "description": "Multi-agent coordination board for Claude Code and Codex CLI - live claims, event feed, and STOP commands via MCP. Companion to Forge LLM.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "Efsoo",
   "license": "Apache-2.0",
   "preview": true,
@@ -84,7 +84,7 @@
       },
       {
         "command": "forgeRelay.configureManagedCodex",
-        "title": "Forge Relay: Configure Isolated Managed Codex"
+        "title": "Forge Relay: Sign In Isolated Codex with ChatGPT"
       },
       {
         "command": "forgeRelay.configureClaude",
@@ -214,7 +214,7 @@
         "forgeRelay.experimentalManagedCodex": {
           "type": "boolean",
           "default": false,
-          "description": "Experimental: allow Forge Relay to start an isolated, workspace-specific managed Codex app-server. Existing Codex IDE and CLI processes remain running. Requires separate OpenAI Platform authentication and billing."
+          "description": "Experimental: allow Forge Relay to start an isolated, workspace-specific managed Codex app-server using ChatGPT Codex subscription access. Existing Codex IDE and CLI processes remain running."
         },
         "forgeRelay.codexManagedProfileRoot": {
           "type": "string",

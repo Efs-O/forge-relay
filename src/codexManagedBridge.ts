@@ -81,7 +81,7 @@ export type CodexFailureKind = 'fatal-auth' | 'fatal-protocol' | 'fatal-contenti
 /** Keep authentication and protocol failures out of restart loops. */
 export function classifyCodexManagedFailure(error: unknown): CodexFailureKind {
     const message = error instanceof Error ? error.message : String(error);
-    if (/refresh[_ -]?token[_ -]?reused|token[_ -]?invalidated|invalid[_ -]?grant|unauthenticated|not logged in|login required|401\b/i.test(message)) {
+    if (/refresh[_ -]?token[_ -]?reused|token[_ -]?invalidated|invalid[_ -]?grant|unauthenticated|not authenticated|not logged in|login required|401\b/i.test(message)) {
         return 'fatal-auth';
     }
     if (/managed profile (?:ownership )?lease|managed profile is (?:already )?owned|held by (?:another|live)|contention/i.test(message)) {
@@ -294,9 +294,13 @@ export class CodexManagedBridge {
         });
         await client.notify('initialized', {});
         const accountResult = await client.request<Record<string, unknown>>('account/read', { refreshToken: false });
-        const account = accountResult.account ?? record(accountResult.result).account;
-        const requiresOpenaiAuth = accountResult.requiresOpenaiAuth === true;
-        if (requiresOpenaiAuth && !account) throw new Error('Unauthenticated Codex account; login required before managed mode can start.');
+        const account = record(accountResult.account ?? record(accountResult.result).account);
+        if (!Object.keys(account).length) {
+            throw new Error('Unauthenticated Codex account; ChatGPT subscription login required before managed mode can start.');
+        }
+        if (account.type !== 'chatgpt') {
+            throw new Error('Managed Codex profile is not authenticated with ChatGPT subscription access.');
+        }
         const thread = await client.request<Record<string, unknown>>('thread/start', {
             cwd: this.opts.repoRoot,
             approvalPolicy: 'never',
@@ -565,7 +569,7 @@ export class CodexManagedBridge {
     private actionableError(error: unknown, kind: CodexFailureKind): string {
         const message = error instanceof Error ? error.message : String(error);
         if (kind === 'fatal-auth') {
-            return `Managed Codex authentication failed. Run "Forge Relay: Configure Isolated Managed Codex", then reconnect. ${message}`;
+            return `Managed Codex subscription authentication failed. Run "Forge Relay: Sign In Isolated Codex with ChatGPT", then reconnect. ${message}`;
         }
         if (kind === 'fatal-contention') {
             return `This isolated managed profile is already owned by another Forge Relay runtime. Stop that Relay runtime or use existing-session MCP mode. ${message}`;

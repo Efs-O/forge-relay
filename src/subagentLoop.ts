@@ -49,7 +49,7 @@ const MAX_STEPS_DEFAULT = 12;
  * queue — a real risk given a second concurrent `codex exec` under the same
  * ChatGPT OAuth login can trip `token_revoked` and kill both sessions. This caps
  * Codex dispatches to one in flight at a time; extra dispatches wait instead of
- * racing. The same lane is held for the lifetime of managed Codex mode.
+ * racing. Isolated managed Codex has its own profile and does not hold this lane.
  */
 
 /**

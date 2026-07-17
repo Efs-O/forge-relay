@@ -25,11 +25,27 @@ export interface CodexManagedProfile {
 export function codexManagedIsolationOverrides(profile: CodexManagedProfile): Readonly<{
     sqlite_home: string;
     cli_auth_credentials_store: 'file';
+    forced_login_method: 'chatgpt';
 }> {
     return Object.freeze({
         sqlite_home: profile.sqliteHome,
         cli_auth_credentials_store: 'file',
+        forced_login_method: 'chatgpt',
     });
+}
+
+/** Build an isolated environment that cannot silently switch to token/key auth. */
+export function managedCodexEnvironment(
+    source: NodeJS.ProcessEnv,
+    profile: CodexManagedProfile,
+): NodeJS.ProcessEnv {
+    const env = { ...source };
+    delete env.OPENAI_API_KEY;
+    delete env.CODEX_API_KEY;
+    delete env.CODEX_ACCESS_TOKEN;
+    env.CODEX_HOME = profile.home;
+    env.CODEX_SQLITE_HOME = profile.sqliteHome;
+    return env;
 }
 
 /**

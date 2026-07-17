@@ -8,8 +8,10 @@ The `feat/managed-codex-relay` branch is replacing the opt-in
 managed-exclusive coordinator with a managed-isolated Codex runtime. MCP-only
 remains the default. The isolated mode owns a standalone app-server, persistent
 thread, workspace-specific `CODEX_HOME` and `CODEX_SQLITE_HOME`, and a profile
-ownership lease. It uses separately provisioned OpenAI Platform API-key
-authentication and does not read or copy the user's ordinary Codex credentials.
+ownership lease. The corrected 0.8.0 design uses Codex app-server's official
+ChatGPT browser OAuth flow and subscription limits. It forces ChatGPT/file
+authentication, strips inherited API/access-token credentials, and does not
+read or copy the user's ordinary Codex credentials.
 
 Existing Codex IDE, desktop, CLI, and other-workspace app-server processes are
 allowed to remain active. Process discovery is diagnostic only; Forge Relay
@@ -17,13 +19,15 @@ neither blocks on nor terminates external Codex PIDs. The advanced
 `forgeRelay.codexManagedProfileRoot` setting may relocate the profile root, but
 Forge Relay still appends a deterministic workspace fingerprint.
 
-The experiment targets version 0.7.0. Type checking, 181 automated tests,
-production build, VSIX inspection, isolated protocol startup, and a live
-Windows `1 -> 3 -> 1` app-server coexistence smoke pass. The 0.7.0 VSIX also
-installs and activates successfully in a disposable VS Code 1.129 extension
-host. It is not ready to merge to `main` until an operator reloads an installed
-window and an operator-supplied Platform API key completes the board-event,
-CLI/worker, multi-workspace, STOP/restart, and credential-leak acceptance checks.
+The 0.7.0 prototype's process/SQLite/lease isolation passed 181 tests, package
+inspection, disposable VS Code activation, and a live Windows `1 -> 3 -> 1`
+app-server coexistence smoke. Its Platform API-key authentication is rejected
+as the final product because subscription usage is required. The corrected
+0.8.0 package passes typecheck, all 184 tests, production build, VSIX inspection,
+installation, and a live unauthenticated ChatGPT login-start/cancel smoke against
+`codex-cli 0.144.4` without disturbing two existing app-servers. It is not ready
+to merge until browser subscription sign-in and the installed board-event,
+CLI/worker, multi-workspace, STOP/restart, and token refresh/soak acceptance pass.
 
 ## Released
 

@@ -32,8 +32,8 @@ export async function confirmManagedCodexStart(codexMode: CodexMode): Promise<bo
     const start = 'Start isolated Codex';
     const choice = await vscode.window.showWarningMessage(
         'Forge Relay will start another Codex process with isolated local state for this workspace. '
-        + 'Your existing Codex IDE and CLI sessions remain running. Setup requires an OpenAI API key, '
-        + 'and managed usage is billed separately through the OpenAI Platform account and shares its rate limits.',
+        + 'Your existing Codex IDE and CLI sessions remain running. Sign this isolated profile in with ChatGPT first; '
+        + 'managed usage follows the same Codex subscription limits rather than Platform API billing.',
         { modal: true },
         start,
     );
@@ -258,7 +258,7 @@ export function getWebviewHtml(
                 <h3>Codex mode</h3>
                 <label class="check-row"><input type="radio" name="codex-mode" value="mcp" checked> Use my existing Codex session (recommended)</label>
                 <label class="check-row hidden" id="codex-managed-option"><input type="radio" name="codex-mode" value="managed-isolated"> Run isolated managed Codex (experimental)</label>
-                <p id="codex-managed-warning" class="prompt-note hidden">Starts another Codex PID with separate local state for this workspace. Existing Codex sessions stay running. Configure this isolated profile with an OpenAI API key first; Platform API usage is billed separately and shares account rate limits.</p>
+                <p id="codex-managed-warning" class="prompt-note hidden">Starts another Codex PID with separate local state for this workspace. Existing Codex sessions stay running. Sign this isolated profile in with ChatGPT first; usage follows your Codex subscription and limits, with no Platform API key.</p>
             </div>
 
             <div class="prompt-block" id="claude-prompt-block">
@@ -273,7 +273,7 @@ export function getWebviewHtml(
                 <div class="prompt-head">
                     <h3>Codex path</h3>
                 </div>
-                <p class="prompt-note" id="codex-path-note">Existing-session mode uses the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Isolated managed mode is opt-in and runs a Relay-owned app-server with workspace-specific state and separately configured OpenAI Platform authentication.</p>
+                <p class="prompt-note" id="codex-path-note">Existing-session mode uses the <code>forgerelay</code> MCP server in <code>~/.codex/config.toml</code>. Isolated managed mode is opt-in and runs a Relay-owned app-server with workspace-specific state and its own ChatGPT-managed Codex subscription login.</p>
             </div>
 
             <div class="modal-actions">

@@ -4,6 +4,19 @@ All notable changes to the Forge Relay extension.
 
 ## Unreleased
 
+## 0.8.0 (Experimental)
+
+- Corrected the managed-Codex authentication architecture to use the official
+  app-server ChatGPT browser OAuth flow and Codex subscription limits. The 0.7.0
+  Platform API-key design did not satisfy the intended product billing model.
+- Added strict subscription enforcement: managed children force ChatGPT/file
+  authentication, strip inherited API/access-token variables, and refuse to
+  start unless `account/read` reports `type: "chatgpt"`.
+- Renamed the setup command to **Forge Relay: Sign In Isolated Codex with
+  ChatGPT** and removed API-key entry and Platform-billing UI.
+- Kept the runtime experimental pending live sidebar/CLI/multi-workspace token
+  refresh validation; no API-key fallback is permitted if that gate fails.
+
 ## 0.7.0 (Experimental)
 
 - Replaced machine-wide managed-Codex exclusivity with an isolated,
