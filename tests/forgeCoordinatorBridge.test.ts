@@ -29,7 +29,7 @@ test('listModels expands profiles and sorts main-profile entries first', async (
     assert.equal(models.find(m => m.name === 'alpha@main')?.provider, 'cerebras', 'provider display name must pass through for the dropdown');
 });
 
-test('coordinator validates, re-ensures for an event burst, and idle-releases', async (t) => {
+test('coordinator defers ensure until an event burst and idle-releases', async (t) => {
     let ensures = 0, releases = 0, chats = 0;
     let delayChat = false;
     let lastChatBody: { tools?: Array<{ type: string; function: Record<string, unknown> }> } = {};
@@ -73,8 +73,8 @@ test('coordinator validates, re-ensures for an event burst, and idle-releases', 
 
     assert.deepEqual(await ForgeCoordinatorBridge.listModels(controlUrl), [{ name: 'model-a', servable: true }]);
     await coordinator.start('model-a');
-    assert.equal(ensures, 1);
-    assert.equal(releases, 1);
+    assert.equal(ensures, 0, 'starting an idle coordinator must not load a local Forge model');
+    assert.equal(releases, 0);
     const handleBurst = (coordinator as unknown as { handleBurst(events: Array<Record<string, unknown>>): Promise<void> }).handleBurst.bind(coordinator);
     await handleBurst([{ type: 'post', agent: 'user', message: 'coordinate this' }]);
     assert.equal(chats, 1);
@@ -84,14 +84,14 @@ test('coordinator validates, re-ensures for an event burst, and idle-releases', 
         assert.ok(tool.function.parameters, 'OpenAI-compatible tools must use function.parameters');
         assert.equal('inputSchema' in tool.function, false, 'MCP inputSchema key must not leak into provider payloads');
     }
-    assert.equal(ensures, 2);
-    assert.equal(releases, 1);
+    assert.equal(ensures, 1);
+    assert.equal(releases, 0);
     assert.equal(board.getState().events.some(event => event.agent === 'forge-coordinator' && event.message === 'standing by'), true);
     await handleBurst([{ type: 'post', agent: 'user', message: 'coordinate another burst' }]);
     assert.equal(chats, 2);
-    assert.equal(ensures, 2, 'a second burst must reuse the active coordinator hold');
+    assert.equal(ensures, 1, 'a second burst must reuse the active coordinator hold');
     await wait(1_100);
-    assert.equal(releases, 2);
+    assert.equal(releases, 1);
 
     delayChat = true;
     const stoppedBurst = handleBurst([{ type: 'post', agent: 'user', message: 'long completion' }]);
@@ -99,7 +99,8 @@ test('coordinator validates, re-ensures for an event burst, and idle-releases', 
     const commandId = board.postCommand('user', 'STOP - test halt', 'forge-coordinator');
     await (coordinator as unknown as { stopForBlockingCommand(): Promise<void> }).stopForBlockingCommand();
     await stoppedBurst;
-    assert.equal(releases, 3, 'STOP must release the active coordinator hold immediately');
+    assert.equal(ensures, 2, 'a new burst after idle release must ensure lazily');
+    assert.equal(releases, 2, 'STOP must release the active coordinator hold immediately');
     assert.equal(board.getState().events.some(event =>
         event.type === 'ack' && event.agent === 'forge-coordinator' && event.meta?.command_id === commandId
     ), true);

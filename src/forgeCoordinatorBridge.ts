@@ -97,10 +97,6 @@ export class ForgeCoordinatorBridge {
             }
             this.selectedEntry = entry;
             this.requiresHold = entry.route ? entry.route === 'ensure' : entry.servable !== false;
-            if (this.requiresHold) {
-                this.validateEnsure(await forgeEnsure(this.opts.controlUrl, model));
-                await forgeRelease(this.opts.controlUrl, model);
-            }
         } catch (err) {
             this.lease.releaseIfOwned();
             throw err;
